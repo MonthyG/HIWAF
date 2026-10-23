@@ -124,6 +124,27 @@ func TestUnparseableClientIPStillRunsNonIPRules(t *testing.T) {
 	assert.Equal(t, []string{"rule_block"}, eventTypes(logs))
 }
 
+func TestUnparseableIPNotIPFailsClosed(t *testing.T) {
+	a := &Access{Rules: []Rule{
+		{Action: "block", Match: Match{PathPrefix: "/admin", NotIP: []string{"1.2.3.4"}}},
+		{Action: "allow", Match: Match{PathPrefix: "/public", NotIP: []string{"1.2.3.4"}}},
+	}}
+	provision(t, a)
+	run := func(target string) (error, any) {
+		r := httptest.NewRequest("GET", target, nil)
+		r.RemoteAddr = "garbage"
+		vars := map[string]any{}
+		r = r.WithContext(context.WithValue(r.Context(), caddyhttp.VarsCtxKey, vars))
+		next := caddyhttp.HandlerFunc(func(http.ResponseWriter, *http.Request) error { return nil })
+		return a.ServeHTTP(httptest.NewRecorder(), r, next), vars[SkipVar]
+	}
+	err, _ := run("/admin")
+	requireStatus(t, err, 403)
+	err, skip := run("/public")
+	assert.NoError(t, err)
+	assert.Nil(t, skip)
+}
+
 func TestGeoBlocking(t *testing.T) {
 	countries := map[string]string{"1.1.1.1": "CN", "2.2.2.2": "US", "3.3.3.3": "de"}
 	a := &Access{BlockCountries: []string{"cn"}, AllowCountries: []string{"US", "CN"}}

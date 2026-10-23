@@ -167,8 +167,16 @@ func (c *compiledRule) matches(r *http.Request, ip netip.Addr, country string) b
 	if len(c.ip) > 0 && !c.ip.Contains(ip) {
 		return false
 	}
-	if len(c.notIP) > 0 && c.notIP.Contains(ip) {
-		return false
+	if len(c.notIP) > 0 {
+		if !ip.IsValid() {
+			// Unknown client IP: fail closed. not_ip counts as satisfied for
+			// block rules and unsatisfied for allow rules.
+			if c.action == "allow" {
+				return false
+			}
+		} else if c.notIP.Contains(ip) {
+			return false
+		}
 	}
 	if c.country != nil && !c.country[country] {
 		return false
