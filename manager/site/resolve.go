@@ -31,7 +31,7 @@ type Resolved struct {
 }
 
 const (
-	defaultBlockTitle   = "Blocked"
+	defaultBlockTitle   = "Request blocked"
 	defaultBlockMessage = "Your request was blocked by the web application firewall."
 )
 

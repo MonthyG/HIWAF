@@ -61,7 +61,8 @@ func TestDefaults(t *testing.T) {
 	assert.Equal(t, &ratelimit.Limit{Requests: 50, WindowSec: 60, BanSec: 600}, r.Error)
 	assert.False(t, r.Challenge)
 	assert.Equal(t, 4, r.ChallengeDifficulty)
-	assert.NotEmpty(t, r.BlockTitle)
+	assert.Equal(t, "Request blocked", r.BlockTitle)
+	assert.Equal(t, "Your request was blocked by the web application firewall.", r.BlockMessage)
 }
 
 func TestCatalog(t *testing.T) {
