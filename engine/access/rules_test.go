@@ -1,0 +1,72 @@
+package access
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func matchRule(t *testing.T, rule Rule, r *http.Request, ip string) bool {
+	t.Helper()
+	c, err := compileRule(rule)
+	require.NoError(t, err)
+	return c.matches(r, netip.MustParseAddr(ip), "")
+}
+
+func TestRuleANDSemantics(t *testing.T) {
+	rule := Rule{Action: "block", Match: Match{PathPrefix: "/admin", NotIP: []string{"1.2.3.4"}}}
+	assert.True(t, matchRule(t, rule, httptest.NewRequest("GET", "/admin/x", nil), "5.5.5.5"))
+	assert.False(t, matchRule(t, rule, httptest.NewRequest("GET", "/admin/x", nil), "1.2.3.4"))
+	assert.False(t, matchRule(t, rule, httptest.NewRequest("GET", "/shop", nil), "5.5.5.5"))
+}
+
+func TestRuleHeaderQueryMethod(t *testing.T) {
+	hdr := Rule{Action: "block", Match: Match{Header: &KV{Name: "User-Agent", Contains: "sqlmap"}}}
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("User-Agent", "sqlmap/1.7")
+	assert.True(t, matchRule(t, hdr, r, "5.5.5.5"))
+	r.Header.Set("User-Agent", "curl")
+	assert.False(t, matchRule(t, hdr, r, "5.5.5.5"))
+
+	q := Rule{Action: "block", Match: Match{Query: &KV{Name: "debug", Regex: "^1$"}}}
+	assert.True(t, matchRule(t, q, httptest.NewRequest("GET", "/?debug=1", nil), "5.5.5.5"))
+	assert.False(t, matchRule(t, q, httptest.NewRequest("GET", "/?debug=12", nil), "5.5.5.5"))
+	assert.False(t, matchRule(t, q, httptest.NewRequest("GET", "/", nil), "5.5.5.5"))
+
+	m := Rule{Action: "block", Match: Match{Method: []string{"post"}}}
+	assert.True(t, matchRule(t, m, httptest.NewRequest("POST", "/", nil), "5.5.5.5"))
+	assert.False(t, matchRule(t, m, httptest.NewRequest("GET", "/", nil), "5.5.5.5"))
+}
+
+func TestRuleHostAndCountry(t *testing.T) {
+	c, err := compileRule(Rule{Action: "block", Match: Match{Host: "Example.com", Country: []string{"cn"}}})
+	require.NoError(t, err)
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Host = "example.COM:8080"
+	assert.True(t, c.matches(r, netip.MustParseAddr("5.5.5.5"), "CN"))
+	assert.False(t, c.matches(r, netip.MustParseAddr("5.5.5.5"), "US"))
+	assert.False(t, c.matches(r, netip.MustParseAddr("5.5.5.5"), ""))
+}
+
+func TestAllowRuleValidationRequiresAnchor(t *testing.T) {
+	assert.Error(t, Rule{Action: "allow", Match: Match{Method: []string{"GET"}}}.Validate())
+	assert.NoError(t, Rule{Action: "allow", Match: Match{PathPrefix: "/api"}}.Validate())
+	assert.Error(t, Rule{Action: "block"}.Validate())
+	assert.Error(t, Rule{Action: "deny", Match: Match{PathExact: "/"}}.Validate())
+
+	err := Rule{Action: "block", Match: Match{PathRegex: "("}}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "match.path_regex")
+
+	err = Rule{Action: "block", Match: Match{Header: &KV{Name: "X"}}}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "match.header")
+
+	err = Rule{Action: "block", Match: Match{IP: []string{"bogus"}}}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "match.ip")
+}

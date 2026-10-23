@@ -1,0 +1,184 @@
+package access
+
+import (
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/netip"
+	"regexp"
+	"strings"
+)
+
+// Rule is a custom access rule. Conditions in Match are ANDed.
+type Rule struct {
+	Action string `json:"action"` // "block" or "allow"
+	Match  Match  `json:"match"`
+}
+
+// Match holds the conditions of a rule; empty conditions are ignored.
+type Match struct {
+	IP         []string `json:"ip,omitempty"`
+	NotIP      []string `json:"not_ip,omitempty"`
+	Country    []string `json:"country,omitempty"`
+	Method     []string `json:"method,omitempty"`
+	PathExact  string   `json:"path_exact,omitempty"`
+	PathPrefix string   `json:"path_prefix,omitempty"`
+	PathRegex  string   `json:"path_regex,omitempty"`
+	Host       string   `json:"host,omitempty"`
+	Header     *KV      `json:"header,omitempty"`
+	Query      *KV      `json:"query,omitempty"`
+}
+
+// KV matches a header or query parameter by name and value (substring or regex).
+type KV struct {
+	Name     string `json:"name"`
+	Contains string `json:"contains,omitempty"`
+	Regex    string `json:"regex,omitempty"`
+}
+
+type compiledKV struct {
+	name     string
+	contains string
+	re       *regexp.Regexp
+}
+
+func compileKV(field string, kv *KV) (*compiledKV, error) {
+	if kv == nil {
+		return nil, nil
+	}
+	if kv.Name == "" {
+		return nil, fmt.Errorf("match.%s.name: required", field)
+	}
+	if kv.Contains == "" && kv.Regex == "" {
+		return nil, fmt.Errorf("match.%s: contains or regex required", field)
+	}
+	c := &compiledKV{name: kv.Name, contains: kv.Contains}
+	if kv.Regex != "" {
+		re, err := regexp.Compile(kv.Regex)
+		if err != nil {
+			return nil, fmt.Errorf("match.%s.regex: %w", field, err)
+		}
+		c.re = re
+	}
+	return c, nil
+}
+
+func (c *compiledKV) matchAny(values []string) bool {
+	for _, v := range values {
+		if (c.contains != "" && strings.Contains(v, c.contains)) || (c.re != nil && c.re.MatchString(v)) {
+			return true
+		}
+	}
+	return false
+}
+
+// compiledRule is a Rule with parsed IP sets and compiled regexes.
+type compiledRule struct {
+	action    string
+	ip, notIP IPSet
+	country   map[string]bool
+	method    map[string]bool
+	m         Match
+	pathRe    *regexp.Regexp
+	header    *compiledKV
+	query     *compiledKV
+}
+
+func compileRule(r Rule) (*compiledRule, error) {
+	m := r.Match
+	switch r.Action {
+	case "block", "allow":
+	default:
+		return nil, fmt.Errorf("action: must be \"block\" or \"allow\", got %q", r.Action)
+	}
+	if len(m.IP) == 0 && len(m.NotIP) == 0 && len(m.Country) == 0 && len(m.Method) == 0 &&
+		m.PathExact == "" && m.PathPrefix == "" && m.PathRegex == "" && m.Host == "" &&
+		m.Header == nil && m.Query == nil {
+		return nil, errors.New("match: at least one condition is required")
+	}
+	if r.Action == "allow" && len(m.IP) == 0 && m.PathExact == "" && m.PathPrefix == "" {
+		return nil, errors.New("match: allow rules need ip, path_exact or path_prefix")
+	}
+	c := &compiledRule{action: r.Action, m: m}
+	var err error
+	if c.ip, err = ParseIPSet(m.IP); err != nil {
+		return nil, fmt.Errorf("match.ip: %w", err)
+	}
+	if c.notIP, err = ParseIPSet(m.NotIP); err != nil {
+		return nil, fmt.Errorf("match.not_ip: %w", err)
+	}
+	if len(m.Country) > 0 {
+		c.country = map[string]bool{}
+		for _, cc := range m.Country {
+			c.country[strings.ToUpper(strings.TrimSpace(cc))] = true
+		}
+	}
+	if len(m.Method) > 0 {
+		c.method = map[string]bool{}
+		for _, me := range m.Method {
+			c.method[strings.ToUpper(strings.TrimSpace(me))] = true
+		}
+	}
+	if m.PathRegex != "" {
+		if c.pathRe, err = regexp.Compile(m.PathRegex); err != nil {
+			return nil, fmt.Errorf("match.path_regex: %w", err)
+		}
+	}
+	if c.header, err = compileKV("header", m.Header); err != nil {
+		return nil, err
+	}
+	if c.query, err = compileKV("query", m.Query); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// Validate checks the rule; error text names the offending field.
+func (r Rule) Validate() error {
+	_, err := compileRule(r)
+	return err
+}
+
+// matches reports whether all set conditions hold. country may be "" (unknown).
+func (c *compiledRule) matches(r *http.Request, ip netip.Addr, country string) bool {
+	m := c.m
+	if len(c.ip) > 0 && !c.ip.Contains(ip) {
+		return false
+	}
+	if len(c.notIP) > 0 && c.notIP.Contains(ip) {
+		return false
+	}
+	if c.country != nil && !c.country[country] {
+		return false
+	}
+	if c.method != nil && !c.method[strings.ToUpper(r.Method)] {
+		return false
+	}
+	path := r.URL.Path
+	if m.PathExact != "" && path != m.PathExact {
+		return false
+	}
+	if m.PathPrefix != "" && !strings.HasPrefix(path, m.PathPrefix) {
+		return false
+	}
+	if c.pathRe != nil && !c.pathRe.MatchString(path) {
+		return false
+	}
+	if m.Host != "" {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if !strings.EqualFold(host, m.Host) {
+			return false
+		}
+	}
+	if c.header != nil && !c.header.matchAny(r.Header.Values(c.header.name)) {
+		return false
+	}
+	if c.query != nil && !c.query.matchAny(r.URL.Query()[c.query.name]) {
+		return false
+	}
+	return true
+}
