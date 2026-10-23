@@ -42,6 +42,28 @@ func TestRuleHeaderQueryMethod(t *testing.T) {
 	assert.False(t, matchRule(t, m, httptest.NewRequest("GET", "/", nil), "5.5.5.5"))
 }
 
+func TestPathNormalisation(t *testing.T) {
+	rule := Rule{Action: "block", Match: Match{PathPrefix: "/admin"}}
+	for _, p := range []string{"//admin", "/./admin", "/x/../admin", "/Admin", "/ADMIN/x"} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.URL.Path = p
+		assert.True(t, matchRule(t, rule, r, "5.5.5.5"), p)
+	}
+	exact := Rule{Action: "block", Match: Match{PathExact: "/Login"}}
+	r := httptest.NewRequest("GET", "/", nil)
+	r.URL.Path = "//login"
+	assert.True(t, matchRule(t, exact, r, "5.5.5.5"))
+	r.URL.Path = "/login/"
+	assert.False(t, matchRule(t, exact, r, "5.5.5.5"))
+}
+
+func TestContainsCaseInsensitive(t *testing.T) {
+	rule := Rule{Action: "block", Match: Match{Header: &KV{Name: "User-Agent", Contains: "sqlmap"}}}
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("User-Agent", "SQLMap/1.0")
+	assert.True(t, matchRule(t, rule, r, "5.5.5.5"))
+}
+
 func TestRuleHostAndCountry(t *testing.T) {
 	c, err := compileRule(Rule{Action: "block", Match: Match{Host: "Example.com", Country: []string{"cn"}}})
 	require.NoError(t, err)

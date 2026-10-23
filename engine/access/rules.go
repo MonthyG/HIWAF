@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"path"
 	"regexp"
 	"strings"
 )
@@ -53,7 +54,7 @@ func compileKV(field string, kv *KV) (*compiledKV, error) {
 	if kv.Contains == "" && kv.Regex == "" {
 		return nil, fmt.Errorf("match.%s: contains or regex required", field)
 	}
-	c := &compiledKV{name: kv.Name, contains: kv.Contains}
+	c := &compiledKV{name: kv.Name, contains: strings.ToLower(kv.Contains)}
 	if kv.Regex != "" {
 		re, err := regexp.Compile(kv.Regex)
 		if err != nil {
@@ -66,7 +67,7 @@ func compileKV(field string, kv *KV) (*compiledKV, error) {
 
 func (c *compiledKV) matchAny(values []string) bool {
 	for _, v := range values {
-		if (c.contains != "" && strings.Contains(v, c.contains)) || (c.re != nil && c.re.MatchString(v)) {
+		if (c.contains != "" && strings.Contains(strings.ToLower(v), c.contains)) || (c.re != nil && c.re.MatchString(v)) {
 			return true
 		}
 	}
@@ -81,6 +82,8 @@ type compiledRule struct {
 	method    map[string]bool
 	m         Match
 	pathRe    *regexp.Regexp
+	exactLC   string
+	prefixLC  string
 	header    *compiledKV
 	query     *compiledKV
 }
@@ -100,7 +103,12 @@ func compileRule(r Rule) (*compiledRule, error) {
 	if r.Action == "allow" && len(m.IP) == 0 && m.PathExact == "" && m.PathPrefix == "" {
 		return nil, errors.New("match: allow rules need ip, path_exact or path_prefix")
 	}
-	c := &compiledRule{action: r.Action, m: m}
+	c := &compiledRule{
+		action:   r.Action,
+		m:        m,
+		exactLC:  strings.ToLower(m.PathExact),
+		prefixLC: strings.ToLower(m.PathPrefix),
+	}
 	var err error
 	if c.ip, err = ParseIPSet(m.IP); err != nil {
 		return nil, fmt.Errorf("match.ip: %w", err)
@@ -140,6 +148,19 @@ func (r Rule) Validate() error {
 	return err
 }
 
+// cleanPath normalises a request path (dot segments, duplicate slashes),
+// keeping a trailing slash if present; empty becomes "/".
+func cleanPath(p string) string {
+	if p == "" {
+		return "/"
+	}
+	c := path.Clean(p)
+	if strings.HasSuffix(p, "/") && c != "/" {
+		c += "/"
+	}
+	return c
+}
+
 // matches reports whether all set conditions hold. country may be "" (unknown).
 func (c *compiledRule) matches(r *http.Request, ip netip.Addr, country string) bool {
 	m := c.m
@@ -155,14 +176,15 @@ func (c *compiledRule) matches(r *http.Request, ip netip.Addr, country string) b
 	if c.method != nil && !c.method[strings.ToUpper(r.Method)] {
 		return false
 	}
-	path := r.URL.Path
-	if m.PathExact != "" && path != m.PathExact {
+	p := cleanPath(r.URL.Path)
+	lp := strings.ToLower(p)
+	if c.exactLC != "" && lp != c.exactLC {
 		return false
 	}
-	if m.PathPrefix != "" && !strings.HasPrefix(path, m.PathPrefix) {
+	if c.prefixLC != "" && !strings.HasPrefix(lp, c.prefixLC) {
 		return false
 	}
-	if c.pathRe != nil && !c.pathRe.MatchString(path) {
+	if c.pathRe != nil && !c.pathRe.MatchString(p) {
 		return false
 	}
 	if m.Host != "" {

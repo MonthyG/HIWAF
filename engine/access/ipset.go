@@ -17,6 +17,9 @@ func ParseIPSet(entries []string) (IPSet, error) {
 	for _, e := range entries {
 		e = strings.TrimSpace(e)
 		if p, err := netip.ParsePrefix(e); err == nil {
+			if p.Addr().Is4In6() && p.Bits() < 96 {
+				return nil, fmt.Errorf("invalid IP or CIDR %q: IPv4-mapped prefix shorter than /96", e)
+			}
 			set = append(set, netip.PrefixFrom(p.Addr().Unmap(), unmapBits(p)).Masked())
 			continue
 		}

@@ -107,6 +107,23 @@ func TestModuleOrder(t *testing.T) {
 	assert.Nil(t, skip)
 }
 
+func TestUnparseableClientIPStillRunsNonIPRules(t *testing.T) {
+	a := &Access{
+		BlockIPs: []string{"0.0.0.0/0"},
+		Rules:    []Rule{{Action: "block", Match: Match{PathPrefix: "/admin"}}},
+	}
+	logs := provision(t, a)
+	r := httptest.NewRequest("GET", "/admin", nil)
+	r.RemoteAddr = "garbage"
+	r = r.WithContext(context.WithValue(r.Context(), caddyhttp.VarsCtxKey, map[string]any{}))
+	called := false
+	next := caddyhttp.HandlerFunc(func(http.ResponseWriter, *http.Request) error { called = true; return nil })
+	err := a.ServeHTTP(httptest.NewRecorder(), r, next)
+	requireStatus(t, err, 403)
+	assert.False(t, called)
+	assert.Equal(t, []string{"rule_block"}, eventTypes(logs))
+}
+
 func TestGeoBlocking(t *testing.T) {
 	countries := map[string]string{"1.1.1.1": "CN", "2.2.2.2": "US", "3.3.3.3": "de"}
 	a := &Access{BlockCountries: []string{"cn"}, AllowCountries: []string{"US", "CN"}}

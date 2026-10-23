@@ -176,10 +176,9 @@ func (a *Access) deny(r *http.Request, typ string) error {
 
 // ServeHTTP applies allow IPs, block IPs, geo rules and custom rules in order.
 func (a *Access) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	ip, err := netip.ParseAddr(clientip.Get(r))
-	if err != nil {
-		return next.ServeHTTP(w, r)
-	}
+	// An unparseable client IP gets the zero Addr: it matches no IP list,
+	// ip or country condition, but non-IP rules still apply.
+	ip, _ := netip.ParseAddr(clientip.Get(r))
 	ip = ip.Unmap()
 
 	if a.allow.Contains(ip) {
@@ -191,7 +190,7 @@ func (a *Access) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhtt
 	}
 
 	country := ""
-	if a.countryOf != nil {
+	if a.countryOf != nil && ip.IsValid() {
 		country = strings.ToUpper(a.countryOf(ip))
 	}
 	if country != "" {
