@@ -13,9 +13,8 @@ import (
 	// HostingInside modules: http.handlers.hi_ratelimit, admin.api.hi_bans,
 	// http.handlers.hi_access.
 	_ "hostinginside/waf/engine/access"
+	_ "hostinginside/waf/engine/challenge"
 	_ "hostinginside/waf/engine/ratelimit"
-	// The hi_challenge import is added as its
-	// package lands (Task 5).
 )
 
 func main() {
