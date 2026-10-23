@@ -54,7 +54,7 @@ func Emit(l *zap.Logger, e Event) {
 	add("method", e.Method)
 	add("uri", e.URI)
 	add("rule_id", e.RuleID)
-	add("msg", e.Msg)
+	add("detail", e.Msg)
 	if !e.Until.IsZero() {
 		fields = append(fields, zap.String("until", e.Until.UTC().Format(time.RFC3339)))
 	}

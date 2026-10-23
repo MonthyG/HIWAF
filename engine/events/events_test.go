@@ -33,7 +33,10 @@ func TestEmitFormatsUntilAsRFC3339(t *testing.T) {
 	m := logs.All()[0].ContextMap()
 	assert.Equal(t, "2026-10-23T12:00:00Z", m["until"])
 	assert.Equal(t, "942100", m["rule_id"])
-	assert.Equal(t, "x", m["msg"])
+	assert.Equal(t, "x", m["detail"])
+	_, has := m["msg"]
+	assert.False(t, has)
+	assert.Equal(t, "hi_event", logs.All()[0].Message)
 }
 
 func TestFromRequest(t *testing.T) {
