@@ -112,3 +112,20 @@ func TestSweepDropsExpired(t *testing.T) {
 	assert.Empty(t, s.bans)
 	s.mu.Unlock()
 }
+
+func TestWeightClampedWhenWindowGrows(t *testing.T) {
+	s := NewState()
+	small := Limit{Requests: 6, WindowSec: 10, BanSec: 60}
+	for i := 0; i < 4; i++ {
+		s.Record(KindAccess, "x", small, time.Unix(1000, 0)) // window [1000,1010): cur=4
+	}
+	_, b := s.Record(KindAccess, "x", small, time.Unix(1010, 0)) // rotate: prev=4, cur=1 → 5
+	assert.False(t, b)
+
+	// Reload grows the window to 60 s and the clock steps back 2 s: ws=960 does
+	// not pass start=1010, so elapsed is -2 s. Unclamped weight would be
+	// 1+2/60 and the estimate 2+4*1.033 = 6.13 > 6 (ban); clamped it is 2+4 = 6.
+	big := Limit{Requests: 6, WindowSec: 60, BanSec: 60}
+	_, b = s.Record(KindAccess, "x", big, time.Unix(1008, 0))
+	assert.False(t, b)
+}

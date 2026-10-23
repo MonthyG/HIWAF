@@ -96,8 +96,12 @@ func (s *State) Record(k Kind, ip string, lim Limit, now time.Time) (until time.
 
 	elapsed := now.Sub(time.Unix(w.start, 0)).Seconds()
 	weight := 1 - elapsed/float64(wl)
+	// Clamp to [0,1]: elapsed is negative when the clock steps back, or when a
+	// reload grows WindowSec so ws no longer advances past the old start.
 	if weight < 0 {
 		weight = 0
+	} else if weight > 1 {
+		weight = 1
 	}
 	w.cur++
 	estimate := float64(w.cur) + float64(w.prev)*weight
