@@ -21,5 +21,5 @@ var Protections = []Protection{
 	{Key: "session_fixation", Label: "Session fixation", IDRanges: []string{"943000-943999"}, Default: true},
 	{Key: "scanner", Label: "Scanner / bad-bot detection", IDRanges: []string{"913000-913999"}, Default: true},
 	{Key: "protocol", Label: "Protocol attacks + enforcement", IDRanges: []string{"920000-920999", "921000-921999", "922000-922999"}, Default: true},
-	{Key: "data_leak", Label: "Response data leakage (needs response body inspection)", IDRanges: []string{"950000-955999"}, Default: false},
+	{Key: "data_leak", Label: "Response data leakage (needs response body inspection)", IDRanges: []string{"950000-956999"}, Default: false},
 }

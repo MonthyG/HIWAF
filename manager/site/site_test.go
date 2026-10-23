@@ -71,7 +71,7 @@ func TestCatalog(t *testing.T) {
 	last := Protections[11]
 	assert.Equal(t, "data_leak", last.Key)
 	assert.False(t, last.Default)
-	assert.Equal(t, []string{"950000-955999"}, last.IDRanges)
+	assert.Equal(t, []string{"950000-956999"}, last.IDRanges)
 	assert.Len(t, Protections[10].IDRanges, 3)
 }
 
