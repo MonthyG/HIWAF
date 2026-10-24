@@ -12,7 +12,6 @@ import (
 	"math"
 	"os"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +24,16 @@ const (
 	maxLineBytes = 1 << 20
 	batchSize    = 500
 )
+
+var siteRe = regexp.MustCompile(`^s_[0-9a-f]{12}$`)
+
+// unquote undoes the escaping Coraza applies to logged values.
+func unquote(v string) string {
+	if u, err := strconv.Unquote(`"` + v + `"`); err == nil {
+		return u
+	}
+	return v
+}
 
 var corazaField = regexp.MustCompile(`\[(\w+) "((?:[^"\\]|\\.)*)"\]`)
 
@@ -53,33 +62,19 @@ func ParseLine(line []byte) (store.Event, bool) {
 	if str("logger") != "http.handlers.waf" {
 		return store.Event{}, false
 	}
-	// msg first, then the remaining string values in key order.
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		if k != "msg" {
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys)
-	var text string
-	for _, k := range append([]string{"msg"}, keys...) {
-		if s, ok := m[k].(string); ok && strings.Contains(s, `[id "`) {
-			text = s
-			break
-		}
-	}
-	if text == "" {
+	text := str("msg") // only msg: other fields may carry attacker-controlled data
+	if !strings.Contains(text, `[id "`) {
 		return store.Event{}, false
 	}
 	f := map[string]string{}
 	for _, sm := range corazaField.FindAllStringSubmatch(text, -1) {
 		if _, dup := f[sm[1]]; !dup {
-			f[sm[1]] = sm[2]
+			f[sm[1]] = unquote(sm[2])
 		}
 	}
-	site := ""
-	if i := strings.IndexByte(f["unique_id"], '-'); i >= 0 {
-		site = f["unique_id"][:i]
+	site, _, _ := strings.Cut(f["unique_id"], "-")
+	if !siteRe.MatchString(site) {
+		return store.Event{}, false
 	}
 	return store.Event{
 		TS: ts, SiteID: site, Type: "waf_match", ClientIP: f["client"],

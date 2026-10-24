@@ -48,7 +48,7 @@ func TestParseIgnoresOther(t *testing.T) {
 }
 
 func TestParseFixture(t *testing.T) {
-	b, err := os.ReadFile("testdata/events.log")
+	b, err := os.ReadFile("testdata/events.jsonl")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,5 +155,23 @@ func TestTailerSkipsHugeLine(t *testing.T) {
 	evs, err := st.QueryEvents(ctx, store.EventFilter{Limit: 10})
 	if err != nil || len(evs) != 1 || evs[0].Type != "geo_block" {
 		t.Fatalf("evs = %+v err = %v", evs, err)
+	}
+}
+
+func TestParseCorazaHardening(t *testing.T) {
+	mk := func(uid string) string {
+		return `{"logger":"http.handlers.waf","msg":"[id \"1\"] [unique_id \"` + uid + `\"]"}`
+	}
+	for _, uid := range []string{"-abc", "garbage-0123", "s_AAAAAAAAAAAA-1", "nodash"} {
+		if ev, ok := ParseLine([]byte(mk(uid))); ok {
+			t.Errorf("unique_id %q parsed as %+v", uid, ev)
+		}
+	}
+	if _, ok := ParseLine([]byte(`{"logger":"http.handlers.waf","msg":"x","other":"[id \"1\"] [unique_id \"s_aaaaaaaaaaaa-1\"]"}`)); ok {
+		t.Error("non-msg field must not produce a match")
+	}
+	ev, ok := ParseLine([]byte(`{"logger":"http.handlers.waf","msg":"[id \"1\"] [msg \"say \\\"hi\\\"\"] [unique_id \"s_aaaaaaaaaaaa-1\"]"}`))
+	if !ok || ev.Msg != `say "hi"` {
+		t.Errorf("ev = %+v ok = %v", ev, ok)
 	}
 }
