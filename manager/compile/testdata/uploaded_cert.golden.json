@@ -7,8 +7,46 @@
       "http_port": 80,
       "https_port": 443,
       "servers": {
+        "plain": {
+          "listen": [
+            ":80"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "static_response",
+                  "headers": {
+                    "Location": [
+                      "https://{http.request.host}{http.request.uri}"
+                    ]
+                  },
+                  "status_code": 308
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "c.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "body": "unknown site",
+                  "handler": "static_response",
+                  "status_code": 404
+                }
+              ]
+            }
+          ]
+        },
         "waf": {
           "automatic_https": {
+            "disable_redirects": true,
             "skip_certificates": [
               "c.com"
             ]

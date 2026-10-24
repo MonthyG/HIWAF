@@ -115,6 +115,11 @@ func validateAccess(a *AccessDoc, geoEnabled bool) error {
 			return verr(l.field, "%s", err.Error())
 		}
 	}
+	if f := a.BlockIPsFile; f != "" {
+		if strings.TrimSpace(f) == "" || strings.ContainsAny(f, `/\`) || strings.Contains(f, "..") {
+			return verr("access.block_ips_file", "must be a plain file name in the feeds directory, got %q", f)
+		}
+	}
 	for _, l := range []struct {
 		field string
 		cc    []string

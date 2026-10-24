@@ -3,6 +3,7 @@ package compile
 import (
 	"fmt"
 	"html"
+	"path/filepath"
 	"strings"
 
 	"hostinginside/waf/engine/access"
@@ -18,6 +19,7 @@ type Options struct {
 	EventLog, ChallengeSecret, GeoIPDB string
 	TrustedProxies                     []string
 	ACMEInternal                       bool
+	FeedsDir                           string // block_ips_file names resolve inside it
 }
 
 // engineLoggers are the Caddy loggers whose lines go to the events file.
@@ -45,12 +47,16 @@ type challengeHandler struct {
 }
 
 // Config compiles every site into one complete Caddy config. certs is keyed
-// by site ID; a site with TLS mode "uploaded" and no cert is an error.
+// by site ID; a site with TLS mode "uploaded" and no cert is an error, as is
+// a site with a block_ips_file when opt.FeedsDir is empty.
 func Config(sites []site.Resolved, certs map[string]site.Cert, opt Options) (map[string]any, error) {
 	var tlsSites, plainSites []site.Resolved
 	var skipCerts []string
 	var pems []any
 	for _, s := range sites {
+		if s.BlockIPsFile != "" && opt.FeedsDir == "" {
+			return nil, fmt.Errorf("site %s: block_ips_file is set but no feeds directory is configured", s.ID)
+		}
 		switch s.TLSMode {
 		case "off":
 			plainSites = append(plainSites, s)
@@ -66,16 +72,22 @@ func Config(sites []site.Resolved, certs map[string]site.Cert, opt Options) (map
 		tlsSites = append(tlsSites, s)
 	}
 
+	// Caddy's own HTTP->HTTPS redirects are off: it would put them after our
+	// host routes on the plain server (so a plain *.a.com would catch a TLS
+	// x.a.com) and skip them when every TLS site has an uploaded cert. The
+	// plain server carries explicit redirects instead.
 	servers := map[string]any{}
 	if len(tlsSites) > 0 {
-		srv := server(tlsSites, opt.HTTPSPort, opt)
+		srv := server(tlsSites, nil, opt.HTTPSPort, opt)
+		autoHTTPS := map[string]any{"disable_redirects": true}
 		if len(skipCerts) > 0 {
-			srv["automatic_https"] = map[string]any{"skip_certificates": skipCerts}
+			autoHTTPS["skip_certificates"] = skipCerts
 		}
+		srv["automatic_https"] = autoHTTPS
 		servers["waf"] = srv
 	}
-	if len(plainSites) > 0 {
-		servers["plain"] = server(plainSites, opt.HTTPPort, opt)
+	if len(plainSites) > 0 || len(tlsSites) > 0 {
+		servers["plain"] = server(plainSites, tlsSites, opt.HTTPPort, opt)
 	}
 	httpApp := map[string]any{"http_port": opt.HTTPPort, "https_port": opt.HTTPSPort}
 	if len(servers) > 0 {
@@ -110,18 +122,19 @@ func Config(sites []site.Resolved, certs map[string]site.Cert, opt Options) (map
 	}, nil
 }
 
-// server builds one HTTP server. Routes for exact domains come before routes
-// for wildcard domains, so x.a.com wins over *.a.com whatever the site order.
-func server(sites []site.Resolved, port int, opt Options) map[string]any {
+// server builds one HTTP server serving sites and redirecting the domains of
+// redirects to HTTPS. Routes for exact domains (sites and redirects alike)
+// come before routes for wildcard domains, so x.a.com wins over *.a.com
+// whatever the site order; the 404 fallback is last.
+func server(sites, redirects []site.Resolved, port int, opt Options) map[string]any {
+	location := "https://{http.request.host}{http.request.uri}"
+	if opt.HTTPSPort != 443 {
+		location = fmt.Sprintf("https://{http.request.host}:%d{http.request.uri}", opt.HTTPSPort)
+	}
 	var routes, errRoutes []any
 	for _, wildcard := range []bool{false, true} {
 		for _, s := range sites {
-			var hosts []string
-			for _, d := range s.Domains {
-				if strings.HasPrefix(d, "*.") == wildcard {
-					hosts = append(hosts, d)
-				}
-			}
+			hosts := hostsOf(s, wildcard)
 			if len(hosts) == 0 {
 				continue
 			}
@@ -136,6 +149,21 @@ func server(sites []site.Resolved, port int, opt Options) map[string]any {
 				"handle": []any{blockPage(s)},
 			})
 		}
+		for _, s := range redirects {
+			hosts := hostsOf(s, wildcard)
+			if len(hosts) == 0 {
+				continue
+			}
+			routes = append(routes, map[string]any{
+				"match":  []any{map[string]any{"host": hosts}},
+				"handle": []any{map[string]any{
+					"handler":     "static_response",
+					"status_code": 308,
+					"headers":     map[string]any{"Location": []string{location}},
+				}},
+				"terminal": true,
+			})
+		}
 	}
 	routes = append(routes, map[string]any{
 		"handle": []any{map[string]any{"handler": "static_response", "status_code": 404, "body": "unknown site"}},
@@ -143,12 +171,25 @@ func server(sites []site.Resolved, port int, opt Options) map[string]any {
 	srv := map[string]any{
 		"listen": []string{fmt.Sprintf(":%d", port)},
 		"routes": routes,
-		"errors": map[string]any{"routes": errRoutes},
+	}
+	if len(errRoutes) > 0 {
+		srv["errors"] = map[string]any{"routes": errRoutes}
 	}
 	if len(opt.TrustedProxies) > 0 {
 		srv["trusted_proxies"] = map[string]any{"source": "static", "ranges": opt.TrustedProxies}
 	}
 	return srv
+}
+
+// hostsOf returns s's wildcard (*.) domains or its exact domains.
+func hostsOf(s site.Resolved, wildcard bool) []string {
+	var hosts []string
+	for _, d := range s.Domains {
+		if strings.HasPrefix(d, "*.") == wildcard {
+			hosts = append(hosts, d)
+		}
+	}
+	return hosts
 }
 
 // siteRoutes is the site's handler chain: access, then an allowlist bypass
@@ -165,7 +206,7 @@ func siteRoutes(s site.Resolved, opt Options) []any {
 				BlockIPs:       s.BlockIPs,
 				AllowCountries: s.AllowCountries,
 				BlockCountries: s.BlockCountries,
-				BlockIPsFile:   s.BlockIPsFile,
+				BlockIPsFile:   feedPath(opt.FeedsDir, s.BlockIPsFile),
 				GeoIPDB:        opt.GeoIPDB,
 				Rules:          s.Rules,
 			},
@@ -196,6 +237,14 @@ func siteRoutes(s site.Resolved, opt Options) []any {
 	}
 	main = append(main, proxy)
 	return append(routes, map[string]any{"handle": main})
+}
+
+// feedPath places a validated plain feed file name inside the feeds directory.
+func feedPath(dir, name string) string {
+	if name == "" {
+		return ""
+	}
+	return filepath.Join(dir, name)
 }
 
 func hasAccess(s site.Resolved) bool {

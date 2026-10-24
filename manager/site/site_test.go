@@ -133,6 +133,10 @@ func TestValidateErrorsNameField(t *testing.T) {
 		{"bad rule ip", func(d *Doc) {
 			d.Access = &AccessDoc{Rules: []access.Rule{{Action: "block", Match: access.Match{NotIP: []string{"zzz"}}}}}
 		}, true, "access.rules[0].match.not_ip"},
+		{"feed path slash", func(d *Doc) { d.Access = &AccessDoc{BlockIPsFile: "/etc/passwd"} }, true, "access.block_ips_file"},
+		{"feed path backslash", func(d *Doc) { d.Access = &AccessDoc{BlockIPsFile: `a\b.txt`} }, true, "access.block_ips_file"},
+		{"feed path dotdot", func(d *Doc) { d.Access = &AccessDoc{BlockIPsFile: "..feed"} }, true, "access.block_ips_file"},
+		{"feed path blank", func(d *Doc) { d.Access = &AccessDoc{BlockIPsFile: "  "} }, true, "access.block_ips_file"},
 		{"difficulty", func(d *Doc) { d.BotChallenge = &ChallengeDoc{Enabled: true, Difficulty: 7} }, true, "bot_challenge.difficulty"},
 	}
 	for _, c := range cases {
@@ -158,6 +162,7 @@ func TestValidateAccepts(t *testing.T) {
 	d.Access = &AccessDoc{
 		AllowIPs:       []string{"1.2.3.4", "10.0.0.0/8"},
 		BlockCountries: []string{"cn"},
+		BlockIPsFile:   "spamhaus-drop.txt",
 		Rules:          []access.Rule{{Action: "allow", Match: access.Match{PathPrefix: "/health"}}},
 	}
 	assert.NoError(t, Validate(d, true))

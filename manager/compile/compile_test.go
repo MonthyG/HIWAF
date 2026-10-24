@@ -133,6 +133,14 @@ func TestConfigGolden(t *testing.T) {
 				RateLimit: &site.RateLimitDoc{Error: site.Optional[ratelimit.Limit]{Set: true, Null: true}},
 			})},
 		},
+		{
+			name: "mixed_tls_plain",
+			sites: []site.Resolved{
+				site.Resolve("s_eeeeeeeeeeee", site.Doc{Domains: []string{"e.com"}, Upstreams: []string{"10.0.0.5:80"}}),
+				site.Resolve("s_ffffffffffff", site.Doc{Domains: []string{"f.com"}, Upstreams: []string{"10.0.0.6:80"},
+					TLS: &site.TLSDoc{Mode: "off"}}),
+			},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -183,6 +191,25 @@ func TestBlockPageDefaults(t *testing.T) {
 	assert.Contains(t, body, "<p>Your request was blocked by the web application firewall.</p>")
 }
 
+// routeHosts lists each route's host matcher (nil for the fallback route).
+func routeHosts(routes []any) [][]string {
+	var out [][]string
+	for _, r := range routes {
+		m, ok := r.(map[string]any)["match"]
+		if !ok {
+			out = append(out, nil)
+			continue
+		}
+		out = append(out, m.([]any)[0].(map[string]any)["host"].([]string))
+	}
+	return out
+}
+
+func servers(t *testing.T, cfg map[string]any) map[string]any {
+	t.Helper()
+	return cfg["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+}
+
 // Ruling R11: exact-domain routes come before wildcard-domain routes, so
 // x.a.com reaches its own site even when *.a.com's site is listed first.
 func TestExactDomainsBeforeWildcards(t *testing.T) {
@@ -190,21 +217,57 @@ func TestExactDomainsBeforeWildcards(t *testing.T) {
 	exact := site.Resolve("s_bbbbbbbbbbbb", site.Doc{Domains: []string{"x.a.com"}, Upstreams: []string{"10.0.0.2:80"}})
 	cfg, err := Config([]site.Resolved{wild, exact}, nil, baseOptions())
 	require.NoError(t, err)
-	srv := cfg["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)["waf"].(map[string]any)
-
-	hostsOf := func(routes []any) [][]string {
-		var out [][]string
-		for _, r := range routes {
-			m, ok := r.(map[string]any)["match"]
-			if !ok {
-				out = append(out, nil) // fallback route
-				continue
-			}
-			out = append(out, m.([]any)[0].(map[string]any)["host"].([]string))
-		}
-		return out
-	}
-	assert.Equal(t, [][]string{{"a.com"}, {"x.a.com"}, {"*.a.com"}, nil}, hostsOf(srv["routes"].([]any)))
+	srv := servers(t, cfg)["waf"].(map[string]any)
+	assert.Equal(t, [][]string{{"a.com"}, {"x.a.com"}, {"*.a.com"}, nil}, routeHosts(srv["routes"].([]any)))
 	assert.Equal(t, [][]string{{"a.com"}, {"x.a.com"}, {"*.a.com"}},
-		hostsOf(srv["errors"].(map[string]any)["routes"].([]any)))
+		routeHosts(srv["errors"].(map[string]any)["routes"].([]any)))
+}
+
+// Ruling R13: the plain server redirects TLS domains itself, ordered with the
+// plain sites, so a plain *.a.com can't capture a TLS x.a.com on port 80.
+func TestPlainServerRedirectsBeforeWildcards(t *testing.T) {
+	plain := site.Resolve("s_aaaaaaaaaaaa", site.Doc{Domains: []string{"*.a.com"}, Upstreams: []string{"10.0.0.1:80"},
+		TLS: &site.TLSDoc{Mode: "off"}})
+	secure := site.Resolve("s_bbbbbbbbbbbb", site.Doc{Domains: []string{"x.a.com"}, Upstreams: []string{"10.0.0.2:80"}})
+	cfg, err := Config([]site.Resolved{plain, secure}, nil, baseOptions())
+	require.NoError(t, err)
+	srvs := servers(t, cfg)
+	routes := srvs["plain"].(map[string]any)["routes"].([]any)
+	assert.Equal(t, [][]string{{"x.a.com"}, {"*.a.com"}, nil}, routeHosts(routes))
+	redir := routes[0].(map[string]any)["handle"].([]any)[0].(map[string]any)
+	assert.Equal(t, 308, redir["status_code"])
+	assert.Equal(t, []string{"https://{http.request.host}{http.request.uri}"},
+		redir["headers"].(map[string]any)["Location"])
+	assert.Equal(t, true, srvs["waf"].(map[string]any)["automatic_https"].(map[string]any)["disable_redirects"])
+}
+
+func TestRedirectKeepsNonDefaultHTTPSPort(t *testing.T) {
+	secure := site.Resolve("s_bbbbbbbbbbbb", site.Doc{Domains: []string{"x.a.com"}, Upstreams: []string{"10.0.0.2:80"}})
+	o := baseOptions()
+	o.HTTPSPort = 8443
+	cfg, err := Config([]site.Resolved{secure}, nil, o)
+	require.NoError(t, err)
+	routes := servers(t, cfg)["plain"].(map[string]any)["routes"].([]any)
+	redir := routes[0].(map[string]any)["handle"].([]any)[0].(map[string]any)
+	assert.Equal(t, []string{"https://{http.request.host}:8443{http.request.uri}"},
+		redir["headers"].(map[string]any)["Location"])
+}
+
+// Ruling R14: block_ips_file is a name inside FeedsDir, never a free path.
+func TestBlockIPsFileInFeedsDir(t *testing.T) {
+	r := site.Resolve("s_aaaaaaaaaaaa", site.Doc{Domains: []string{"a.com"}, Upstreams: []string{"10.0.0.1:80"},
+		Access: &site.AccessDoc{BlockIPsFile: "drop.txt"}})
+	_, err := Config([]site.Resolved{r}, nil, baseOptions())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "s_aaaaaaaaaaaa")
+
+	o := baseOptions()
+	o.FeedsDir = "/var/lib/hi-waf/feeds"
+	cfg, err := Config([]site.Resolved{r}, nil, o)
+	require.NoError(t, err)
+	siteRoute := servers(t, cfg)["waf"].(map[string]any)["routes"].([]any)[0].(map[string]any)
+	sub := siteRoute["handle"].([]any)[0].(map[string]any)["routes"].([]any)
+	acc := sub[0].(map[string]any)["handle"].([]any)[0].(accessHandler)
+	assert.Equal(t, "hi_access", acc.Handler)
+	assert.Equal(t, filepath.Join("/var/lib/hi-waf/feeds", "drop.txt"), acc.BlockIPsFile)
 }
