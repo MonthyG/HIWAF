@@ -279,3 +279,19 @@ func TestCertUploadNeverEchoesKey(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "shop.example.com")
 	assert.Equal(t, 2, fl.loads())
 }
+
+// A failed bans call is an engine error, not a rejected config.
+func TestBansEngineErrorWording(t *testing.T) {
+	h, fl := newTestAPI(t)
+	fl.err = &caddyclient.LoadError{Status: 500, Body: `{"error":"boom"}`}
+	for _, req := range [][2]string{
+		{"GET", "/api/v1/bans?site=s_aaaaaaaaaaaa"},
+		{"DELETE", "/api/v1/bans?site=s_aaaaaaaaaaaa&ip=1.2.3.4"},
+	} {
+		rec := do(t, h, req[0], req[1], "")
+		assert.Equal(t, http.StatusBadGateway, rec.Code, req[1])
+		var e struct{ Error string }
+		decodeBody(t, rec, &e)
+		assert.Equal(t, "engine error: boom", e.Error, req[1])
+	}
+}

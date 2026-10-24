@@ -166,6 +166,16 @@ func (a *API) writeErr(w http.ResponseWriter, err error) {
 	}
 }
 
+// engineErr turns an admin API error answer on a non-config call (bans)
+// into a neutral 502; writeErr's LoadError wording is about config loads.
+func engineErr(err error) error {
+	var le *caddyclient.LoadError
+	if errors.As(err, &le) {
+		return &httpError{status: http.StatusBadGateway, msg: "engine error: " + caddyMessage(le.Body)}
+	}
+	return err
+}
+
 // caddyMessage extracts the "error" field Caddy's admin API puts in its JSON
 // error bodies, falling back to the raw text.
 func caddyMessage(body string) string {
@@ -526,7 +536,7 @@ func (a *API) stats(w http.ResponseWriter, r *http.Request) {
 func (a *API) bans(w http.ResponseWriter, r *http.Request) {
 	b, err := a.cl.Bans(r.Context(), r.URL.Query().Get("site"))
 	if err != nil {
-		a.writeErr(w, err)
+		a.writeErr(w, engineErr(err))
 		return
 	}
 	if b == nil {
@@ -548,7 +558,7 @@ func (a *API) unban(w http.ResponseWriter, r *http.Request) {
 	}
 	ok, err := a.cl.Unban(r.Context(), siteID, ip)
 	if err != nil {
-		a.writeErr(w, err)
+		a.writeErr(w, engineErr(err))
 		return
 	}
 	if !ok {

@@ -35,11 +35,21 @@ OWASP Core Rule Set. It has two binaries:
 
 | OS | Command | Output |
 |---|---|---|
-| Windows (PowerShell) | `.\build\build.ps1` | `bin\hi-waf.exe` and `bin\manager.exe` |
+| Windows (PowerShell) | `powershell -ExecutionPolicy Bypass -File build\build.ps1` | `bin\hi-waf.exe` and `bin\manager.exe` |
 | Linux | `./build/build.sh` | `bin/hi-waf` and `bin/manager` |
 
 Both scripts run `go mod tidy` first, then `go build` for `./cmd/hi-waf` and
 `./cmd/manager`.
+
+If `go mod tidy` fails with TLS or certificate errors, a network filter is
+probably intercepting `proxy.golang.org`. Point Go at another module proxy
+and build again, for example in PowerShell:
+
+```powershell
+$env:GOPROXY = "https://goproxy.io,direct"
+```
+
+In a POSIX shell, use `export GOPROXY=https://goproxy.io,direct`.
 
 ## Run
 
@@ -50,6 +60,13 @@ bin/hi-waf run --resume
 bin/manager -config examples/manager.json
 ```
 
+In PowerShell on Windows, from the repository root:
+
+```powershell
+.\bin\hi-waf.exe run --resume
+.\bin\manager.exe -config examples\manager.json
+```
+
 - `--resume` makes the engine start from the last config it was given, so
   sites keep working if the manager is down.
 - On startup the manager pushes the full config compiled from its database.
@@ -58,9 +75,12 @@ bin/manager -config examples/manager.json
 
 In `examples/manager.json`:
 
-- The API listens on `:9000`, and the key `change-me-dev-key` authenticates
-  as `Authorization: Bearer change-me-dev-key`. Change the key for any real
-  use.
+- The API listens on `127.0.0.1:9000` only, and the key
+  `change-me-dev-key` authenticates as
+  `Authorization: Bearer change-me-dev-key`. The manager refuses to start if
+  that example key is configured while `listen` is not a loopback address
+  (`127.0.0.1`, `::1` or `localhost`). Replace the key before you expose the
+  API, for example with `"listen": ":9000"`.
 - The engine admin API is `http://127.0.0.1:2019`.
 - Sites are served on HTTP port `8080` and HTTPS port `8443`.
 - `acme_internal` is `true`, so certificates come from Caddy's local CA
@@ -70,7 +90,10 @@ For production:
 
 - Set `http_port` to `80`, `https_port` to `443` and `acme_internal` to
   `false`.
-- Set `trusted_proxies` if the engine sits behind a load balancer.
+- Set `trusted_proxies` if the engine sits behind a load balancer. The
+  compiled config also sets Caddy's `trusted_proxies_strict`, so the client
+  IP is read from `X-Forwarded-For` right to left, skipping trusted hops,
+  and a client can't spoof an `allow_ips` address in that header.
 
 ## Walkthrough with curl
 
@@ -174,6 +197,8 @@ its default.
       For that reason it must include an `ip`, `path_exact` or `path_prefix`
       condition, and every request it lets through is logged as
       `allowed_by_rule`.
+      An `allow` rule never matches a request path that contains `;` or a
+      `..` segment, because backends disagree about what such paths mean.
 - **`bot_challenge`**: `{enabled, difficulty}`. Difficulty is 1-6, default 4.
 - **`block_page`**: `{title, message}` for the 403 page.
 
@@ -200,9 +225,12 @@ A site with `tls.mode` set to `uploaded` can't be saved until its
 certificate exists. Use this order:
 
 ```sh
-# 1. Create the site with TLS off.
+# 1. Create the site with TLS off. It uses a new domain, because
+#    shop.example.com exists from the walkthrough above and a duplicate
+#    domain gets 400.
 curl -s -H "$AUTH" -H "Content-Type: application/json" $API/sites \
-     -d '{"domains":["shop.example.com"],"upstreams":["10.0.0.5:8080"],"tls":{"mode":"off"}}'
+     -d '{"domains":["secure.example.com"],"upstreams":["10.0.0.5:8080"],"tls":{"mode":"off"}}'
+SITE=s_xxxxxxxxxxxx   # paste the id from the response
 
 # 2. Upload the certificate and key (PEM) for that site.
 jq -n --rawfile c cert.pem --rawfile k key.pem '{cert_pem:$c, key_pem:$k}' |
@@ -212,7 +240,7 @@ jq -n --rawfile c cert.pem --rawfile k key.pem '{cert_pem:$c, key_pem:$k}' |
 # 3. Switch the site to the uploaded certificate. PUT replaces the whole
 #    document.
 curl -s -X PUT -H "$AUTH" -H "Content-Type: application/json" $API/sites/$SITE \
-     -d '{"domains":["shop.example.com"],"upstreams":["10.0.0.5:8080"],"tls":{"mode":"uploaded"}}'
+     -d '{"domains":["secure.example.com"],"upstreams":["10.0.0.5:8080"],"tls":{"mode":"uploaded"}}'
 ```
 
 ### The JS challenge blocks non-browser clients

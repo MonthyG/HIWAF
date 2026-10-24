@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -43,6 +44,24 @@ type config struct {
 }
 
 const secretKey = "challenge_secret"
+
+// devKey is the API key shipped in examples/manager.json. It is accepted only
+// while the API listens on a loopback address.
+const devKey = "change-me-dev-key"
+
+// loopback reports whether a listen address binds only to the local host.
+// An empty host (":9000") binds every interface and is not loopback.
+func loopback(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 func loadConfig(path string) (config, error) {
 	var c config
@@ -80,6 +99,13 @@ func loadConfig(path string) (config, error) {
 		return c, fmt.Errorf("%s: api_keys must list at least one non-empty key", path)
 	}
 	c.APIKeys = keys
+	if !loopback(c.Listen) {
+		for _, k := range keys {
+			if k == devKey {
+				return c, fmt.Errorf("%s: api key %q is the public example key; replace it or listen on a loopback address (127.0.0.1, ::1, localhost), not %q", path, devKey, c.Listen)
+			}
+		}
+	}
 	// Caddy runs with its own working directory, so paths it opens are made
 	// absolute here; the manager reads the event log at the same path.
 	for _, p := range []*string{&c.EventLog, &c.GeoIPDB, &c.FeedsDir} {
