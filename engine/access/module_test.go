@@ -169,7 +169,7 @@ func TestGeoBlocking(t *testing.T) {
 
 func TestCountryRule(t *testing.T) {
 	a := &Access{
-		Rules:   []Rule{{Action: "block", Match: Match{Country: []string{"RU"}, PathPrefix: "/login"}}},
+		Rules: []Rule{{Action: "block", Match: Match{Country: []string{"RU"}, PathPrefix: "/login"}}},
 	}
 	provision(t, a)
 	a.countryOf = func(netip.Addr) string { return "RU" }

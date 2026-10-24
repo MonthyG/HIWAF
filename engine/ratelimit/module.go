@@ -170,11 +170,13 @@ func (sw *statusWriter) WriteHeader(code int) {
 	sw.ResponseWriterWrapper.WriteHeader(code)
 }
 
-// interruptionRe matches coraza-caddy's interruption error message.
-var interruptionRe = regexp.MustCompile(`^interruption triggered by rule (\d+) `)
+// interruptionRe matches coraza-caddy's interruption error message: the
+// released v2.6.x returns a bare "interruption triggered", newer main adds
+// " by rule <id> (<action>)".
+var interruptionRe = regexp.MustCompile(`^interruption triggered(?:$| by rule (\d+) )`)
 
 // isWAFInterruption reports whether err is a coraza-caddy interruption and,
-// if so, the rule ID that triggered it.
+// if so, the rule ID that triggered it ("" when coraza-caddy doesn't say).
 func isWAFInterruption(err error) (ruleID string, ok bool) {
 	var he caddyhttp.HandlerError
 	if err == nil || !errors.As(err, &he) || he.Err == nil {

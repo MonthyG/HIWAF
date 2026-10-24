@@ -97,18 +97,18 @@ func TestConfigGolden(t *testing.T) {
 		opt   func(*Options)
 	}{
 		{
-			name:  "auto_tls",
+			name: "auto_tls",
 			sites: []site.Resolved{site.Resolve("s_aaaaaaaaaaaa", site.Doc{
 				Domains: []string{"a.com"}, Upstreams: []string{"10.0.0.1:80"},
 			})},
 		},
 		{
-			name:  "plain_access_challenge",
+			name: "plain_access_challenge",
 			sites: []site.Resolved{site.Resolve("s_bbbbbbbbbbbb", site.Doc{
 				Domains:   []string{"b.com"},
 				Upstreams: []string{"https://10.0.0.2:443"},
 				TLS:       &site.TLSDoc{Mode: "off"},
-				Access:    &site.AccessDoc{
+				Access: &site.AccessDoc{
 					BlockIPs: []string{"1.2.3.4"},
 					Rules:    []access.Rule{{Action: "block", Match: access.Match{PathPrefix: "/admin"}}},
 				},
@@ -117,7 +117,7 @@ func TestConfigGolden(t *testing.T) {
 			opt: func(o *Options) { o.TrustedProxies = []string{"10.0.0.0/8"} },
 		},
 		{
-			name:  "uploaded_cert",
+			name: "uploaded_cert",
 			sites: []site.Resolved{site.Resolve("s_cccccccccccc", site.Doc{
 				Domains: []string{"c.com"}, Upstreams: []string{"10.0.0.3:80"},
 				TLS: &site.TLSDoc{Mode: "uploaded"},
@@ -126,7 +126,7 @@ func TestConfigGolden(t *testing.T) {
 			opt:   func(o *Options) { o.ACMEInternal = true },
 		},
 		{
-			name:  "waf_off",
+			name: "waf_off",
 			sites: []site.Resolved{site.Resolve("s_dddddddddddd", site.Doc{
 				Domains: []string{"d.com"}, Upstreams: []string{"10.0.0.4:80"},
 				WAF:       &site.WAFDoc{Mode: "off"},

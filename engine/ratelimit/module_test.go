@@ -55,6 +55,16 @@ func TestIsWAFInterruptionPinsCorazaFormat(t *testing.T) {
 	assert.False(t, ok)
 	_, ok = isWAFInterruption(nil)
 	assert.False(t, ok)
+	_, ok = isWAFInterruption(caddyhttp.Error(500, errors.New("interruption triggered elsewhere")))
+	assert.False(t, ok)
+}
+
+// coraza-caddy v2.6.2 (latest release) returns a bare error without the rule ID.
+func TestIsWAFInterruptionReleasedFormat(t *testing.T) {
+	err := caddyhttp.HandlerError{StatusCode: 403, Err: errors.New("interruption triggered")}
+	id, ok := isWAFInterruption(err)
+	assert.True(t, ok)
+	assert.Equal(t, "", id)
 }
 
 func TestAccessLimit429WithRetryAfter(t *testing.T) {

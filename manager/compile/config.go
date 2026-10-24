@@ -155,7 +155,7 @@ func server(sites, redirects []site.Resolved, port int, opt Options) map[string]
 				continue
 			}
 			routes = append(routes, map[string]any{
-				"match":  []any{map[string]any{"host": hosts}},
+				"match": []any{map[string]any{"host": hosts}},
 				"handle": []any{map[string]any{
 					"handler":     "static_response",
 					"status_code": 308,

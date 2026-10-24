@@ -12,15 +12,10 @@ OWASP Core Rule Set. It has two binaries:
   SQLite, compiles them into one Caddy JSON config, pushes that config to the
   engine's admin API, and reads the engine's security events into SQLite.
 
-> **Status: this code has not been compiled or tested yet.** Go wasn't
-> installed on the machine it was written on. Before you do anything else, run:
->
-> ```sh
-> go mod tidy && go vet ./... && go test ./...
-> ```
->
-> Expect a round of fixes the first time it runs. `go test -short ./...` skips
-> the end-to-end engine tests in `integration/`.
+> **Status:** builds and passes `go vet ./...` and `go test ./...` (including
+> `-race`) on Windows with Go 1.27. It has not yet run against real traffic or
+> on Linux. `go test -short ./...` skips the end-to-end engine tests in
+> `integration/`, which start an in-process Caddy on ports 9080 and 2999.
 
 ## Prerequisites
 
@@ -47,9 +42,13 @@ and build again, for example in PowerShell:
 
 ```powershell
 $env:GOPROXY = "https://goproxy.io,direct"
+$env:GOSUMDB = "sum.golang.org https://sum.golang.google.cn"
 ```
 
-In a POSIX shell, use `export GOPROXY=https://goproxy.io,direct`.
+`GOSUMDB` points at Google's official mirror of the checksum database, for
+networks that also block `sum.golang.org`; every module is still verified
+against it. In a POSIX shell, use
+`export GOPROXY=https://goproxy.io,direct GOSUMDB="sum.golang.org https://sum.golang.google.cn"`.
 
 ## Run
 

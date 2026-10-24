@@ -54,7 +54,12 @@ func startEngine(t *testing.T, id, siteJSON string) *engine {
 	if testing.Short() {
 		t.Skip("end-to-end engine test; skipped with -short")
 	}
-	dir := t.TempDir() // registered first, so it is removed after caddy.Stop
+	// Not t.TempDir: its cleanup fails the test when the log is still open
+	// (see the Stop cleanup below).
+	dir, err := os.MkdirTemp("", "hi-waf-e2e-")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
 
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "upstream ok")
@@ -100,6 +105,10 @@ func startEngine(t *testing.T, id, siteJSON string) *engine {
 		if err := caddy.Stop(); err != nil {
 			t.Logf("caddy stop: %v", err)
 		}
+		// Best effort: Caddy keeps a file log writer open for the life of the
+		// process (its refcount survives Stop and config swaps), so on Windows
+		// the log can't be deleted until the test binary exits.
+		_ = os.RemoveAll(dir)
 	})
 	return e
 }
