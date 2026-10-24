@@ -177,6 +177,10 @@ func server(sites, redirects []site.Resolved, port int, opt Options) map[string]
 	}
 	if len(opt.TrustedProxies) > 0 {
 		srv["trusted_proxies"] = map[string]any{"source": "static", "ranges": opt.TrustedProxies}
+		// Strict mode reads X-Forwarded-For right to left, skipping trusted
+		// hops; the default left-to-right parse takes the first (client
+		// controlled) value, letting anyone spoof an allow_ips address.
+		srv["trusted_proxies_strict"] = 1
 	}
 	return srv
 }

@@ -271,3 +271,27 @@ func TestBlockIPsFileInFeedsDir(t *testing.T) {
 	assert.Equal(t, "hi_access", acc.Handler)
 	assert.Equal(t, filepath.Join("/var/lib/hi-waf/feeds", "drop.txt"), acc.BlockIPsFile)
 }
+
+// Trusted proxies always come with strict (right-to-left) X-Forwarded-For
+// parsing, so a client can't spoof an allow_ips address in the header.
+func TestTrustedProxiesStrict(t *testing.T) {
+	secure := site.Resolve("s_bbbbbbbbbbbb", site.Doc{Domains: []string{"x.a.com"}, Upstreams: []string{"10.0.0.2:80"}})
+	cfg, err := Config([]site.Resolved{secure}, nil, baseOptions())
+	require.NoError(t, err)
+	for name, s := range servers(t, cfg) {
+		assert.NotContains(t, s.(map[string]any), "trusted_proxies", name)
+		assert.NotContains(t, s.(map[string]any), "trusted_proxies_strict", name)
+	}
+
+	o := baseOptions()
+	o.TrustedProxies = []string{"10.0.0.0/8"}
+	cfg, err = Config([]site.Resolved{secure}, nil, o)
+	require.NoError(t, err)
+	srvs := servers(t, cfg)
+	require.Len(t, srvs, 2)
+	for name, s := range srvs {
+		m := s.(map[string]any)
+		assert.Equal(t, map[string]any{"source": "static", "ranges": []string{"10.0.0.0/8"}}, m["trusted_proxies"], name)
+		assert.Equal(t, 1, m["trusted_proxies_strict"], name)
+	}
+}

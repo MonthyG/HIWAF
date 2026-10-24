@@ -92,3 +92,42 @@ func TestAllowRuleValidationRequiresAnchor(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "match.ip")
 }
+
+// Ruling R16: block rules see the path a lenient backend would serve, so
+// backslash and ";param" tricks still reach the block rule.
+func TestBlockRuleSeesThroughPathTricks(t *testing.T) {
+	rule := Rule{Action: "block", Match: Match{PathPrefix: "/admin"}}
+	for _, p := range []string{`/x\..\admin`, `\admin`, "/static/..;/admin", "/admin;jsessionid=1", `/static\..;\admin/x`} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.URL.Path = p
+		assert.True(t, matchRule(t, rule, r, "5.5.5.5"), p)
+	}
+	assert.Equal(t, "/admin/", cleanPath(`/x\..\admin\`))
+	assert.Equal(t, "/", cleanPath(""))
+}
+
+// Ruling R16: an allow rule never matches a raw path with ";" or a ".."
+// segment, so /static/..;/admin can't skip the WAF via an allow for /static.
+func TestAllowRuleRefusesAmbiguousPaths(t *testing.T) {
+	rule := Rule{Action: "allow", Match: Match{PathPrefix: "/static"}}
+	ok := httptest.NewRequest("GET", "/static/app.js", nil)
+	assert.True(t, matchRule(t, rule, ok, "5.5.5.5"))
+
+	for _, p := range []string{"/static/..;/admin", "/static/../admin", `/static\..\admin`, "/static/x;y", "/static/../static/a"} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.URL.Path = p
+		assert.False(t, matchRule(t, rule, r, "5.5.5.5"), p)
+	}
+
+	// The escaped form is checked too.
+	r := httptest.NewRequest("GET", "/static/%2e%2e/admin", nil)
+	assert.False(t, matchRule(t, rule, r, "5.5.5.5"))
+	r = httptest.NewRequest("GET", "/static/a%3Bb", nil)
+	assert.False(t, matchRule(t, rule, r, "5.5.5.5"))
+
+	// IP-anchored allow rules refuse them too.
+	ipRule := Rule{Action: "allow", Match: Match{IP: []string{"5.5.5.5"}}}
+	r = httptest.NewRequest("GET", "/", nil)
+	r.URL.Path = "/a/../b"
+	assert.False(t, matchRule(t, ipRule, r, "5.5.5.5"))
+}

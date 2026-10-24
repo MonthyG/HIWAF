@@ -148,22 +148,56 @@ func (r Rule) Validate() error {
 	return err
 }
 
-// cleanPath normalises a request path (dot segments, duplicate slashes),
-// keeping a trailing slash if present; empty becomes "/".
+// cleanPath normalises a request path the way lenient backends read it:
+// backslashes become slashes, ";params" are cut from each segment (Tomcat and
+// Spring ignore them, so "/static/..;/admin" reaches /admin), then dot
+// segments and duplicate slashes are resolved. A trailing slash is kept;
+// empty becomes "/".
 func cleanPath(p string) string {
 	if p == "" {
 		return "/"
 	}
-	c := path.Clean(p)
+	p = strings.ReplaceAll(p, "\\", "/")
+	if strings.Contains(p, ";") {
+		segs := strings.Split(p, "/")
+		for i, seg := range segs {
+			if j := strings.IndexByte(seg, ';'); j >= 0 {
+				segs[i] = seg[:j]
+			}
+		}
+		p = strings.Join(segs, "/")
+	}
+	c := path.Clean("/" + p)
 	if strings.HasSuffix(p, "/") && c != "/" {
 		c += "/"
 	}
 	return c
 }
 
+// ambiguousPath reports whether the raw request path holds a ";" or a ".."
+// segment (either slash direction). Backends disagree on such paths, so an
+// allow rule never matches them: "/static/../admin" must not be let past the
+// WAF by an allow rule for /static.
+func ambiguousPath(r *http.Request) bool {
+	for _, p := range []string{r.URL.Path, r.URL.RawPath} {
+		if strings.Contains(p, ";") {
+			return true
+		}
+		for _, seg := range strings.Split(strings.ReplaceAll(p, "\\", "/"), "/") {
+			if seg == ".." {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // matches reports whether all set conditions hold. country may be "" (unknown).
 func (c *compiledRule) matches(r *http.Request, ip netip.Addr, country string) bool {
 	m := c.m
+	if c.action == "allow" && ambiguousPath(r) {
+		return false
+	}
 	if len(c.ip) > 0 && !c.ip.Contains(ip) {
 		return false
 	}
