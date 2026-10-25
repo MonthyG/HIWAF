@@ -13,7 +13,8 @@ import (
 
 // Rule is a custom access rule. Conditions in Match are ANDed.
 type Rule struct {
-	Action string `json:"action"` // "block" or "allow"
+	Name   string `json:"name,omitempty"` // labels the rule in events
+	Action string `json:"action"`         // "block" or "allow"
 	Match  Match  `json:"match"`
 }
 
@@ -76,6 +77,7 @@ func (c *compiledKV) matchAny(values []string) bool {
 
 // compiledRule is a Rule with parsed IP sets and compiled regexes.
 type compiledRule struct {
+	name      string
 	action    string
 	ip, notIP IPSet
 	country   map[string]bool
@@ -104,6 +106,7 @@ func compileRule(r Rule) (*compiledRule, error) {
 		return nil, errors.New("match: allow rules need ip, path_exact or path_prefix")
 	}
 	c := &compiledRule{
+		name:     r.Name,
 		action:   r.Action,
 		m:        m,
 		exactLC:  strings.ToLower(m.PathExact),

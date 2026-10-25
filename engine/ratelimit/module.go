@@ -94,24 +94,29 @@ func (rl *RateLimit) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 
 	// Already banned: no event, to avoid a log line per blocked request.
 	if until, banned := rl.state.BannedUntil(ip, now); banned {
+		events.Tag(r, events.ActionRateLimit, "banned")
 		return tooManyRequests(w, until, now)
 	}
 	if rl.Access != nil {
 		if until, newly := rl.state.Record(KindAccess, ip, *rl.Access, now); newly {
 			rl.emitBan(r, until, "access")
+			events.Tag(r, events.ActionRateLimit, "access")
 			return tooManyRequests(w, until, now)
 		}
 	}
 
-	r.Header.Set(TxHeader, rl.SiteID+"-"+randomHex8())
+	tx := rl.SiteID + "-" + randomHex8()
+	r.Header.Set(TxHeader, tx)
+	events.TagTx(r, tx)
 
 	sw := &statusWriter{ResponseWriterWrapper: &caddyhttp.ResponseWriterWrapper{ResponseWriter: w}}
 	err := next.ServeHTTP(sw, r)
 
 	if ruleID, ok := isWAFInterruption(err); ok {
 		e := events.FromRequest(r, events.TypeWAFBlock, rl.SiteID)
-		e.RuleID = ruleID
+		e.RuleID, e.TxID = ruleID, tx
 		events.Emit(rl.logger, e)
+		events.Tag(r, events.ActionBlock, events.TypeWAFBlock)
 		if rl.Attack != nil {
 			if until, newly := rl.state.Record(KindAttack, ip, *rl.Attack, time.Now()); newly {
 				rl.emitBan(r, until, "attack")
