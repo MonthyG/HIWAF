@@ -1,0 +1,196 @@
+{
+  "admin": {
+    "listen": "127.0.0.1:2019"
+  },
+  "apps": {
+    "http": {
+      "http_port": 80,
+      "https_port": 443,
+      "servers": {
+        "plain": {
+          "listen": [
+            ":80"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "static_response",
+                  "headers": {
+                    "Location": [
+                      "https://{http.request.host}{http.request.uri}"
+                    ]
+                  },
+                  "status_code": 308
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "d.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "body": "unknown site",
+                  "handler": "static_response",
+                  "status_code": 404
+                }
+              ]
+            }
+          ]
+        },
+        "waf": {
+          "automatic_https": {
+            "disable_redirects": true
+          },
+          "errors": {
+            "routes": [
+              {
+                "handle": [
+                  {
+                    "body": "<!doctype html><html><head><meta charset=\"utf-8\"><title>Request blocked</title></head><body><h1>Request blocked</h1><p>Your request was blocked by the web application firewall.</p><p>Event ID: {http.error.id}</p></body></html>",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "{http.error.status_code}"
+                  }
+                ],
+                "match": [
+                  {
+                    "host": [
+                      "d.com"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "listen": [
+            ":443"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "reverse_proxy",
+                          "headers": {
+                            "request": {
+                              "delete": [
+                                "X-Hi-Waf-Tx"
+                              ]
+                            }
+                          },
+                          "upstreams": [
+                            {
+                              "dial": "10.0.0.4:80"
+                            }
+                          ]
+                        }
+                      ],
+                      "match": [
+                        {
+                          "vars": {
+                            "{http.vars.hi_skip}": [
+                              "true"
+                            ]
+                          }
+                        }
+                      ],
+                      "terminal": true
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "hi_ratelimit",
+                          "site_id": "s_dddddddddddd",
+                          "attack": {
+                            "requests": 10,
+                            "window_sec": 60,
+                            "ban_sec": 1800
+                          }
+                        },
+                        {
+                          "handler": "reverse_proxy",
+                          "headers": {
+                            "request": {
+                              "delete": [
+                                "X-Hi-Waf-Tx"
+                              ]
+                            }
+                          },
+                          "upstreams": [
+                            {
+                              "dial": "10.0.0.4:80"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "d.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "body": "unknown site",
+                  "handler": "static_response",
+                  "status_code": 404
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "logging": {
+    "logs": {
+      "default": {
+        "exclude": [
+          "http.handlers.waf",
+          "http.handlers.hi_access",
+          "http.handlers.hi_ratelimit",
+          "http.handlers.hi_challenge"
+        ]
+      },
+      "hi_events": {
+        "encoder": {
+          "format": "json"
+        },
+        "include": [
+          "http.handlers.waf",
+          "http.handlers.hi_access",
+          "http.handlers.hi_ratelimit",
+          "http.handlers.hi_challenge"
+        ],
+        "writer": {
+          "filename": "/var/log/hi-waf/events.log",
+          "output": "file",
+          "roll_size_mb": 100
+        }
+      }
+    }
+  }
+}
