@@ -53,6 +53,10 @@ func (f *fakeLoader) Bans(context.Context, string) (map[string][]caddyclient.Ban
 
 func (f *fakeLoader) Unban(context.Context, string, string) (bool, error) { return true, f.err }
 
+func (f *fakeLoader) WaitRooms(context.Context) (map[string]caddyclient.WaitRoom, error) {
+	return map[string]caddyclient.WaitRoom{}, f.err
+}
+
 func (f *fakeLoader) loads() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

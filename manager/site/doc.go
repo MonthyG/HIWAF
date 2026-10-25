@@ -53,20 +53,73 @@ func (o Optional[T]) Resolve(def *T) *T {
 
 // Doc is the customer-facing site document.
 type Doc struct {
-	Name         string        `json:"name,omitempty"`
-	Domains      []string      `json:"domains"`
-	Upstreams    []string      `json:"upstreams"`
-	TLS          *TLSDoc       `json:"tls,omitempty"`
-	WAF          *WAFDoc       `json:"waf,omitempty"`
-	RateLimit    *RateLimitDoc `json:"rate_limit,omitempty"`
-	Access       *AccessDoc    `json:"access,omitempty"`
-	BotChallenge *ChallengeDoc `json:"bot_challenge,omitempty"`
-	BlockPage    *BlockPageDoc `json:"block_page,omitempty"`
+	Name         string          `json:"name,omitempty"`
+	Description  string          `json:"description,omitempty"`
+	Type         string          `json:"type,omitempty"` // proxy (default) | static | redirect
+	Domains      []string        `json:"domains"`
+	Ports        []PortDoc       `json:"ports,omitempty"`
+	Upstreams    []string        `json:"upstreams,omitempty"`
+	LBPolicy     string          `json:"lb_policy,omitempty"` // round_robin (default) | ip_hash | least_conn
+	Redirect     *RedirectDoc    `json:"redirect,omitempty"`
+	Advanced     *AdvancedDoc    `json:"advanced,omitempty"`
+	TLS          *TLSDoc         `json:"tls,omitempty"`
+	WAF          *WAFDoc         `json:"waf,omitempty"`
+	RateLimit    *RateLimitDoc   `json:"rate_limit,omitempty"`
+	Access       *AccessDoc      `json:"access,omitempty"`
+	BotChallenge *ChallengeDoc   `json:"bot_challenge,omitempty"`
+	Auth         *AuthDoc        `json:"auth,omitempty"`
+	WaitingRoom  *WaitingRoomDoc `json:"waiting_room,omitempty"`
+	BlockPage    *BlockPageDoc   `json:"block_page,omitempty"`
+}
+
+// PortDoc is one listening port. Without ports a site listens on the global
+// HTTP port and, unless TLS is off, the global HTTPS port.
+type PortDoc struct {
+	Port  int  `json:"port"`
+	HTTPS bool `json:"https"`
+}
+
+// RedirectDoc configures a redirect site.
+type RedirectDoc struct {
+	URL          string `json:"url"`
+	Code         int    `json:"code,omitempty"` // 301 | 302 (default) | 307 | 308
+	PreservePath bool   `json:"preserve_path,omitempty"`
+}
+
+// AdvancedDoc holds the "Advanced" switches. Pointers default to true.
+type AdvancedDoc struct {
+	HSTS         bool  `json:"hsts,omitempty"`
+	Gzip         bool  `json:"gzip,omitempty"`
+	HTTPRedirect *bool `json:"http_redirect,omitempty"` // HTTP -> HTTPS, default true
+	KeepHost     *bool `json:"keep_host,omitempty"`     // pass the client Host upstream, default true
+}
+
+// AuthDoc configures the password gate. On input a user carries a plain
+// Password, which the API replaces with PasswordHash before storing.
+type AuthDoc struct {
+	Enabled       bool          `json:"enabled"`
+	Users         []AuthUserDoc `json:"users,omitempty"`
+	SessionTTLSec int           `json:"session_ttl_sec,omitempty"`
+}
+
+// AuthUserDoc is one password-gate user.
+type AuthUserDoc struct {
+	Username     string `json:"username"`
+	Password     string `json:"password,omitempty"`
+	PasswordHash string `json:"password_hash,omitempty"`
+}
+
+// WaitingRoomDoc configures the waiting room.
+type WaitingRoomDoc struct {
+	Enabled       bool `json:"enabled"`
+	MaxActive     int  `json:"max_active,omitempty"`
+	SessionTTLSec int  `json:"session_ttl_sec,omitempty"`
 }
 
 // TLSDoc configures TLS.
 type TLSDoc struct {
-	Mode string `json:"mode,omitempty"` // auto | uploaded | off
+	Mode   string `json:"mode,omitempty"`    // auto | uploaded | off
+	CertID string `json:"cert_id,omitempty"` // a global certificate, for mode uploaded
 }
 
 // WAFDoc configures the WAF.
@@ -91,6 +144,8 @@ type AccessDoc struct {
 	AllowCountries []string      `json:"allow_countries,omitempty"`
 	BlockCountries []string      `json:"block_countries,omitempty"`
 	BlockIPsFile   string        `json:"block_ips_file,omitempty"`
+	AllowGroups    []string      `json:"allow_groups,omitempty"` // IP group IDs
+	BlockGroups    []string      `json:"block_groups,omitempty"`
 	Rules          []access.Rule `json:"rules,omitempty"`
 }
 

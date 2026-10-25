@@ -12,7 +12,24 @@ import (
 // Resolved is a site with every default applied.
 type Resolved struct {
 	ID, Name            string
+	Description, Type   string
 	Domains, Upstreams  []string
+	Ports               []PortDoc // empty = the global HTTP (+ HTTPS) ports
+	LBPolicy            string
+	RedirectURL         string
+	RedirectCode        int
+	PreservePath        bool
+	HSTS, Gzip          bool
+	HTTPRedirect        bool
+	KeepHost            bool
+	CertID              string
+	AllowGroups         []string
+	BlockGroups         []string
+	AuthEnabled         bool
+	AuthUsers           []AuthUserDoc
+	AuthTTL             int
+	WaitEnabled         bool
+	WaitMax, WaitTTL    int
 	TLSMode, WAFMode    string
 	Paranoia            int
 	AnomalyThreshold    int
@@ -41,6 +58,11 @@ func Resolve(id string, d Doc) Resolved {
 	r := Resolved{
 		ID:                  id,
 		Name:                d.Name,
+		Description:         d.Description,
+		Type:                "proxy",
+		LBPolicy:            "round_robin",
+		HTTPRedirect:        true,
+		KeepHost:            true,
 		TLSMode:             "auto",
 		WAFMode:             "block",
 		Paranoia:            1,
@@ -54,11 +76,44 @@ func Resolve(id string, d Doc) Resolved {
 		r.Domains = append(r.Domains, strings.ToLower(strings.TrimSpace(dom)))
 	}
 	r.Upstreams = append([]string(nil), d.Upstreams...)
+	r.Ports = append([]PortDoc(nil), d.Ports...)
+	if d.Type != "" {
+		r.Type = d.Type
+	}
+	if d.LBPolicy != "" {
+		r.LBPolicy = d.LBPolicy
+	}
+	if rd := d.Redirect; rd != nil {
+		r.RedirectURL, r.RedirectCode, r.PreservePath = rd.URL, rd.Code, rd.PreservePath
+		if r.RedirectCode == 0 {
+			r.RedirectCode = 302
+		}
+	}
+	if adv := d.Advanced; adv != nil {
+		r.HSTS, r.Gzip = adv.HSTS, adv.Gzip
+		if adv.HTTPRedirect != nil {
+			r.HTTPRedirect = *adv.HTTPRedirect
+		}
+		if adv.KeepHost != nil {
+			r.KeepHost = *adv.KeepHost
+		}
+	}
+	if au := d.Auth; au != nil {
+		r.AuthEnabled = au.Enabled
+		r.AuthUsers = append([]AuthUserDoc(nil), au.Users...)
+		r.AuthTTL = au.SessionTTLSec
+	}
+	if wr := d.WaitingRoom; wr != nil {
+		r.WaitEnabled, r.WaitMax, r.WaitTTL = wr.Enabled, wr.MaxActive, wr.SessionTTLSec
+	}
 	for _, p := range Protections {
 		r.Protections[p.Key] = p.Default
 	}
-	if d.TLS != nil && d.TLS.Mode != "" {
-		r.TLSMode = d.TLS.Mode
+	if d.TLS != nil {
+		if d.TLS.Mode != "" {
+			r.TLSMode = d.TLS.Mode
+		}
+		r.CertID = d.TLS.CertID
 	}
 	if w := d.WAF; w != nil {
 		if w.Mode != "" {
@@ -89,6 +144,8 @@ func Resolve(id string, d Doc) Resolved {
 		r.AllowCountries = upperAll(a.AllowCountries)
 		r.BlockCountries = upperAll(a.BlockCountries)
 		r.BlockIPsFile = a.BlockIPsFile
+		r.AllowGroups = append([]string(nil), a.AllowGroups...)
+		r.BlockGroups = append([]string(nil), a.BlockGroups...)
 		r.Rules = append([]access.Rule(nil), a.Rules...)
 	}
 	if c := d.BotChallenge; c != nil {

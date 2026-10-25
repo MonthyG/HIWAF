@@ -3,6 +3,7 @@ package site
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,15 +27,50 @@ func Validate(d Doc, geoEnabled bool) error {
 	if utf8.RuneCountInString(d.Name) > 64 {
 		return verr("name", "must be at most 64 characters")
 	}
+	if utf8.RuneCountInString(d.Description) > 500 {
+		return verr("description", "must be at most 500 characters")
+	}
+	tlsOff := d.TLS != nil && d.TLS.Mode == "off"
 	if len(d.Domains) == 0 {
 		return verr("domains", "at least one domain is required")
 	}
 	for i, dom := range d.Domains {
-		if !validHostname(strings.ToLower(strings.TrimSpace(dom)), true) {
+		dom = strings.ToLower(strings.TrimSpace(dom))
+		if dom == "*" {
+			if !tlsOff {
+				return verr(fmt.Sprintf("domains[%d]", i), "the match-all domain * needs tls.mode off")
+			}
+			continue
+		}
+		if !validHostname(dom, true) {
 			return verr(fmt.Sprintf("domains[%d]", i), "invalid hostname %q", dom)
 		}
 	}
-	if err := validateUpstreams(d.Upstreams); err != nil {
+	switch d.Type {
+	case "", "proxy":
+		if err := validateUpstreams(d.Upstreams); err != nil {
+			return err
+		}
+		switch d.LBPolicy {
+		case "", "round_robin", "ip_hash", "least_conn":
+		default:
+			return verr("lb_policy", "must be round_robin, ip_hash or least_conn, got %q", d.LBPolicy)
+		}
+	case "static", "redirect":
+		if len(d.Upstreams) > 0 {
+			return verr("upstreams", "only proxy sites have upstreams")
+		}
+	default:
+		return verr("type", "must be proxy, static or redirect, got %q", d.Type)
+	}
+	if d.Type == "redirect" {
+		if err := validateRedirect(d.Redirect); err != nil {
+			return err
+		}
+	} else if d.Redirect != nil {
+		return verr("redirect", "only redirect sites have a redirect")
+	}
+	if err := validatePorts(d.Ports, tlsOff); err != nil {
 		return err
 	}
 	if d.TLS != nil {
@@ -42,6 +78,25 @@ func Validate(d Doc, geoEnabled bool) error {
 		case "", "auto", "uploaded", "off":
 		default:
 			return verr("tls.mode", "must be auto, uploaded or off, got %q", d.TLS.Mode)
+		}
+		if d.TLS.CertID != "" {
+			if d.TLS.Mode != "uploaded" {
+				return verr("tls.cert_id", "needs tls.mode uploaded")
+			}
+			if !objectID("c", d.TLS.CertID) {
+				return verr("tls.cert_id", "invalid certificate ID %q", d.TLS.CertID)
+			}
+		}
+	}
+	if err := validateAuth(d.Auth); err != nil {
+		return err
+	}
+	if wr := d.WaitingRoom; wr != nil {
+		if wr.Enabled && wr.MaxActive < 1 {
+			return verr("waiting_room.max_active", "must be at least 1")
+		}
+		if wr.MaxActive < 0 || wr.SessionTTLSec < 0 {
+			return verr("waiting_room", "values must not be negative")
 		}
 	}
 	if w := d.WAF; w != nil {
@@ -106,7 +161,109 @@ func knownProtection(k string) bool {
 	return false
 }
 
+// objectID reports whether id is prefix + "_" + 12 lowercase hex characters.
+func objectID(prefix, id string) bool {
+	rest, ok := strings.CutPrefix(id, prefix+"_")
+	if !ok || len(rest) != 12 {
+		return false
+	}
+	for i := 0; i < len(rest); i++ {
+		if c := rest[i]; !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func validateRedirect(rd *RedirectDoc) error {
+	if rd == nil || rd.URL == "" {
+		return verr("redirect.url", "is required for redirect sites")
+	}
+	u, err := url.Parse(rd.URL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return verr("redirect.url", "must be an absolute http(s) URL, got %q", rd.URL)
+	}
+	if strings.ContainsAny(rd.URL, "{}") {
+		return verr("redirect.url", "must not contain braces")
+	}
+	switch rd.Code {
+	case 0, 301, 302, 307, 308:
+	default:
+		return verr("redirect.code", "must be 301, 302, 307 or 308, got %d", rd.Code)
+	}
+	return nil
+}
+
+func validatePorts(ports []PortDoc, tlsOff bool) error {
+	seen := map[int]bool{}
+	for i, p := range ports {
+		field := fmt.Sprintf("ports[%d]", i)
+		if p.Port < 1 || p.Port > 65535 {
+			return verr(field+".port", "must be between 1 and 65535, got %d", p.Port)
+		}
+		if seen[p.Port] {
+			return verr(field+".port", "port %d is listed twice", p.Port)
+		}
+		seen[p.Port] = true
+		if p.HTTPS && tlsOff {
+			return verr(field+".https", "an HTTPS port needs TLS (tls.mode auto or uploaded)")
+		}
+	}
+	if len(ports) > 0 && !tlsOff {
+		hasTLS := false
+		for _, p := range ports {
+			hasTLS = hasTLS || p.HTTPS
+		}
+		if !hasTLS {
+			return verr("ports", "with TLS on, at least one port must be HTTPS (or set tls.mode off)")
+		}
+	}
+	return nil
+}
+
+func validateAuth(a *AuthDoc) error {
+	if a == nil {
+		return nil
+	}
+	if a.Enabled && len(a.Users) == 0 {
+		return verr("auth.users", "at least one user is required when auth is enabled")
+	}
+	if a.SessionTTLSec < 0 {
+		return verr("auth.session_ttl_sec", "must not be negative")
+	}
+	seen := map[string]bool{}
+	for i, u := range a.Users {
+		field := fmt.Sprintf("auth.users[%d]", i)
+		if u.Username == "" || len(u.Username) > 64 || strings.ContainsAny(u.Username, "|. \t") {
+			return verr(field+".username", "must be 1-64 characters without spaces, dots or |")
+		}
+		if seen[u.Username] {
+			return verr(field+".username", "duplicate username %q", u.Username)
+		}
+		seen[u.Username] = true
+		switch {
+		case u.Password != "":
+			if n := utf8.RuneCountInString(u.Password); n < 6 || len(u.Password) > 72 {
+				return verr(field+".password", "must be 6-72 bytes")
+			}
+		case u.PasswordHash == "":
+			return verr(field+".password", "is required")
+		}
+	}
+	return nil
+}
+
 func validateAccess(a *AccessDoc, geoEnabled bool) error {
+	for _, l := range []struct {
+		field string
+		ids   []string
+	}{{"access.allow_groups", a.AllowGroups}, {"access.block_groups", a.BlockGroups}} {
+		for _, id := range l.ids {
+			if !objectID("g", id) {
+				return verr(l.field, "invalid IP group ID %q", id)
+			}
+		}
+	}
 	for _, l := range []struct {
 		field string
 		ips   []string

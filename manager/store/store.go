@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver
@@ -44,7 +45,99 @@ CREATE TABLE IF NOT EXISTS events (
 	msg       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_site_ts ON events(site_id, ts);
+CREATE TABLE IF NOT EXISTS requests (
+	id        INTEGER PRIMARY KEY AUTOINCREMENT,
+	ts        INTEGER NOT NULL,
+	site_id   TEXT NOT NULL,
+	client_ip TEXT NOT NULL,
+	country   TEXT NOT NULL,
+	method    TEXT NOT NULL,
+	host      TEXT NOT NULL,
+	uri       TEXT NOT NULL,
+	status    INTEGER NOT NULL,
+	bytes     INTEGER NOT NULL,
+	dur_ms    REAL NOT NULL,
+	ua        TEXT NOT NULL,
+	referer   TEXT NOT NULL,
+	html      INTEGER NOT NULL,
+	action    TEXT NOT NULL,
+	kind      TEXT NOT NULL,
+	tx_id     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS requests_ts ON requests(ts);
+CREATE INDEX IF NOT EXISTS requests_site_ts ON requests(site_id, ts);
+CREATE INDEX IF NOT EXISTS requests_tx ON requests(tx_id) WHERE tx_id <> '';
+CREATE TABLE IF NOT EXISTS objects (
+	kind    TEXT NOT NULL,
+	id      TEXT NOT NULL,
+	doc     TEXT NOT NULL,
+	created INTEGER NOT NULL,
+	updated INTEGER NOT NULL,
+	PRIMARY KEY (kind, id)
+);
+CREATE TABLE IF NOT EXISTS users (
+	username     TEXT PRIMARY KEY,
+	hash         TEXT NOT NULL,
+	totp_secret  TEXT NOT NULL DEFAULT '',
+	totp_enabled INTEGER NOT NULL DEFAULT 0,
+	created      INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+	id       TEXT PRIMARY KEY,
+	username TEXT NOT NULL,
+	expires  INTEGER NOT NULL,
+	created  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tokens (
+	id        TEXT PRIMARY KEY,
+	name      TEXT NOT NULL,
+	hash      TEXT NOT NULL UNIQUE,
+	created   INTEGER NOT NULL,
+	last_used INTEGER NOT NULL DEFAULT 0
+);
 `
+
+// eventColumns are columns added to events after the first release; Open
+// adds any that are missing.
+var eventColumns = []struct{ name, def string }{
+	{"tx_id", "TEXT NOT NULL DEFAULT ''"},
+	{"data", "TEXT NOT NULL DEFAULT ''"},
+	{"severity", "INTEGER NOT NULL DEFAULT 9"},
+	{"category", "TEXT NOT NULL DEFAULT ''"},
+	{"country", "TEXT NOT NULL DEFAULT ''"},
+}
+
+func migrate(db *sql.DB) error {
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	rows, err := db.Query(`PRAGMA table_info(events)`)
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		have[name] = true
+	}
+	rows.Close()
+	for _, c := range eventColumns {
+		if !have[c.name] {
+			if _, err := db.Exec(`ALTER TABLE events ADD COLUMN ` + c.name + ` ` + c.def); err != nil {
+				return err
+			}
+		}
+	}
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS events_tx ON events(tx_id) WHERE tx_id <> '';
+		CREATE INDEX IF NOT EXISTS events_type_ts ON events(type, ts)`)
+	return err
+}
 
 // Store is a SQLite-backed store. It uses a single connection, which
 // serialises all access and sidesteps SQLITE_BUSY between our own writers.
@@ -61,7 +154,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: open: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(schema); err != nil {
+	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
@@ -249,11 +342,15 @@ func (s *Store) SetSetting(ctx context.Context, key, val string) error {
 	return err
 }
 
-// Event is a security event.
+// Event is a security event. Severity is the syslog level Coraza reports
+// (2 critical ... 5 notice), 9 when unknown; Category is the protection key
+// of a WAF rule, "score" for CRS scoring rules.
 type Event struct {
 	ID                                                     int64
 	TS                                                     time.Time
 	SiteID, Type, ClientIP, Host, Method, URI, RuleID, Msg string
+	TxID, Data, Category, Country                          string
+	Severity                                               int
 }
 
 // InsertEvents stores events in one transaction.
@@ -263,15 +360,21 @@ func (s *Store) InsertEvents(ctx context.Context, evs []Event) error {
 	}
 	return s.Tx(ctx, func(t *Tx) error {
 		stmt, err := t.tx.PrepareContext(ctx,
-			`INSERT INTO events(ts, site_id, type, client_ip, host, method, uri, rule_id, msg)
-			 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			`INSERT INTO events(ts, site_id, type, client_ip, host, method, uri, rule_id, msg,
+			 tx_id, data, severity, category, country)
+			 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 		if err != nil {
 			return err
 		}
 		defer stmt.Close()
 		for _, e := range evs {
+			sev := e.Severity
+			if sev == 0 {
+				sev = 9
+			}
 			if _, err := stmt.ExecContext(ctx, e.TS.UnixMilli(), e.SiteID, e.Type,
-				e.ClientIP, e.Host, e.Method, e.URI, e.RuleID, e.Msg); err != nil {
+				e.ClientIP, e.Host, e.Method, e.URI, e.RuleID, e.Msg,
+				e.TxID, e.Data, sev, e.Category, e.Country); err != nil {
 				return err
 			}
 		}
@@ -283,21 +386,42 @@ func (s *Store) InsertEvents(ctx context.Context, evs []Event) error {
 // means 100 and is capped at 1000.
 type EventFilter struct {
 	SiteID, Type, IP string
-	Since            time.Time
-	Limit            int
+	Types            []string // any of these types; combined with Type
+	TxID             string
+	Since, Until     time.Time
+	Limit, Offset    int
 }
 
 // where builds a WHERE clause from fixed fragments; values are always bound.
 func where(siteID, typ, ip string, since time.Time) (string, []any) {
+	return EventFilter{SiteID: siteID, Type: typ, IP: ip, Since: since}.where()
+}
+
+func (f EventFilter) where() (string, []any) {
 	clause, args := " WHERE 1=1", []any{}
-	if siteID != "" {
+	if f.SiteID != "" {
 		clause += " AND site_id = ?"
-		args = append(args, siteID)
+		args = append(args, f.SiteID)
 	}
-	if typ != "" {
+	if f.Type != "" {
 		clause += " AND type = ?"
-		args = append(args, typ)
+		args = append(args, f.Type)
 	}
+	if len(f.Types) > 0 {
+		clause += " AND type IN (" + strings.TrimSuffix(strings.Repeat("?,", len(f.Types)), ",") + ")"
+		for _, t := range f.Types {
+			args = append(args, t)
+		}
+	}
+	if f.TxID != "" {
+		clause += " AND tx_id = ?"
+		args = append(args, f.TxID)
+	}
+	if !f.Until.IsZero() {
+		clause += " AND ts < ?"
+		args = append(args, f.Until.UnixMilli())
+	}
+	ip, since := f.IP, f.Since
 	if ip != "" {
 		clause += " AND client_ip = ?"
 		args = append(args, ip)
@@ -318,11 +442,12 @@ func (s *Store) QueryEvents(ctx context.Context, f EventFilter) ([]Event, error)
 	if limit > 1000 {
 		limit = 1000
 	}
-	clause, args := where(f.SiteID, f.Type, f.IP, f.Since)
-	args = append(args, limit)
+	clause, args := f.where()
+	args = append(args, limit, max(f.Offset, 0))
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, ts, site_id, type, client_ip, host, method, uri, rule_id, msg FROM events`+
-			clause+` ORDER BY ts DESC, id DESC LIMIT ?`, args...)
+		`SELECT id, ts, site_id, type, client_ip, host, method, uri, rule_id, msg,
+		 tx_id, data, severity, category, country FROM events`+
+			clause+` ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +457,7 @@ func (s *Store) QueryEvents(ctx context.Context, f EventFilter) ([]Event, error)
 		var e Event
 		var ts int64
 		if err := rows.Scan(&e.ID, &ts, &e.SiteID, &e.Type, &e.ClientIP, &e.Host,
-			&e.Method, &e.URI, &e.RuleID, &e.Msg); err != nil {
+			&e.Method, &e.URI, &e.RuleID, &e.Msg, &e.TxID, &e.Data, &e.Severity, &e.Category, &e.Country); err != nil {
 			return nil, err
 		}
 		e.TS = time.UnixMilli(ts).UTC()
@@ -341,10 +466,12 @@ func (s *Store) QueryEvents(ctx context.Context, f EventFilter) ([]Event, error)
 	return out, rows.Err()
 }
 
-// Count is a key with its occurrence count.
+// Count is a key with its occurrence count and, where known, how many of
+// those were blocked.
 type Count struct {
-	Key string
-	N   int
+	Key     string
+	N       int
+	Blocked int
 }
 
 // Stats summarises events.
