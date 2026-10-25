@@ -32,9 +32,9 @@ const (
 
 // Access-log actions recorded by Tag.
 const (
-	ActionDeny      = "deny"      // hi_access block (IP, geo, rule)
-	ActionAllow     = "allow"     // hi_access allowlist or allow rule
-	ActionBlock     = "block"     // WAF interruption
+	ActionDeny      = "deny"  // hi_access block (IP, geo, rule)
+	ActionAllow     = "allow" // hi_access allowlist or allow rule
+	ActionBlock     = "block" // WAF interruption
 	ActionRateLimit = "rate_limit"
 	ActionChallenge = "challenge" // challenge page served or failed
 	ActionAuth      = "auth"      // auth login page served or failed

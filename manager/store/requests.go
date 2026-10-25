@@ -9,13 +9,13 @@ import (
 
 // Request is one access-log line.
 type Request struct {
-	TS                                         time.Time
-	SiteID, ClientIP, Country, Method, Host    string
-	URI, UA, Referer, Action, Kind, TxID       string
-	Status                                     int
-	Bytes                                      int64
-	DurMS                                      float64
-	HTML                                       bool
+	TS                                      time.Time
+	SiteID, ClientIP, Country, Method, Host string
+	URI, UA, Referer, Action, Kind, TxID    string
+	Status                                  int
+	Bytes                                   int64
+	DurMS                                   float64
+	HTML                                    bool
 }
 
 // blockedActions are the access-log actions counted as "blocked".
@@ -73,9 +73,9 @@ func (f RequestFilter) where() (string, []any) {
 
 // Overview holds the Statistics page counters.
 type Overview struct {
-	Requests, PV, UV, UniqueIPs   int
-	Blocked, BlockedIPs           int
-	Err4xx, Err5xx, Blocked4xx    int
+	Requests, PV, UV, UniqueIPs int
+	Blocked, BlockedIPs         int
+	Err4xx, Err5xx, Blocked4xx  int
 }
 
 // Overview counts requests matching f.

@@ -206,11 +206,11 @@ func ParseAccess(line []byte) (store.Request, bool) {
 type Tailer struct {
 	Path      string
 	Store     *store.Store
-	Interval  time.Duration           // default 1s
-	Logger    *slog.Logger            // default slog.Default()
-	OffsetKey string                  // settings key of the read offset; default "ingest_offset"
-	Access    bool                    // the file is a Caddy access log
-	Country   func(ip string) string  // optional GeoIP lookup
+	Interval  time.Duration          // default 1s
+	Logger    *slog.Logger           // default slog.Default()
+	OffsetKey string                 // settings key of the read offset; default "ingest_offset"
+	Access    bool                   // the file is a Caddy access log
+	Country   func(ip string) string // optional GeoIP lookup
 }
 
 func (t *Tailer) key() string {
