@@ -36,7 +36,10 @@ function SystemTab() {
       <Row k="Manager started" v={fmtTime(system.started)} />
       <Row k="Applications" v={system.sites} />
       <Row k="Default HTTP / HTTPS ports" v={`${system.http_port} / ${system.https_port}`} />
-      <Row k="GeoIP database" v={ok(system.geoip)} />
+      <Row k="GeoIP database" v={<>{ok(system.geoip)}{system.geoip && (
+        <Typography component="span" sx={{ fontSize: 12, color: 'text.secondary', ml: 1 }}>
+          IP geolocation by <a href="https://db-ip.com" target="_blank" rel="noreferrer">DB-IP</a> (CC BY 4.0)
+        </Typography>)}</>} />
       <Row k="Traffic statistics (access log)" v={ok(system.access_log)} />
       <Row k="Static file applications" v={ok(system.static_sites)} />
     </Section>
