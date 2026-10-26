@@ -84,7 +84,7 @@ interface SourcePlan {
 }
 
 const plans: SourcePlan[] = [
-  { ip: '45.148.10.82', country: 'NL', site: S.harbour, host: 'booking.keelungharbour.tw', startMin: 58, minutes: 17, count: 31, blocked: true, kinds: [
+  { ip: '45.148.10.82', country: 'NL', site: S.harbour, host: 'booking.keelungharbour.tw', startMin: 7, minutes: 3, count: 31, blocked: true, kinds: [
     { cat: 'scanner', rule: '913100', msg: 'Found User-Agent associated with security scanner', sev: 2, uri: '/', data: 'Matched Data: sqlmap found within REQUEST_HEADERS:User-Agent: sqlmap/1.8.4' },
     { cat: 'sqli', rule: '942100', msg: 'SQL Injection Attack Detected via libinjection', sev: 2, uri: "/tours?date=2026-11-02' AND SLEEP(5)-- -", data: "Matched Data: s&sos found within ARGS:date: 2026-11-02' AND SLEEP(5)-- -" },
     { cat: 'sqli', rule: '942190', msg: 'Detects MSSQL code execution and information gathering attempts', sev: 2, uri: '/tours?id=1 UNION SELECT table_name FROM information_schema.tables', data: 'Matched Data: UNION SELECT found within ARGS:id' },
@@ -130,14 +130,14 @@ attacks.sort((a, b) => b.ts.localeCompare(a.ts))
 // ---------- bans, and the events of the other stages ----------
 
 export const bans: Record<string, Ban[]> = {
-  [S.harbour]: [{ ip: '45.148.10.82', until: new Date(NOW.getTime() - 58 * MIN + 11 * MIN + 1800_000).toISOString() }],
+  [S.harbour]: [{ ip: '45.148.10.82', until: new Date(NOW.getTime() - 4 * MIN + 1800_000).toISOString() }],
 }
 
 export const events: EventRow[] = []
 const event = (msAgo: number, siteId: string, type: string, ip: string, country: string, host: string, method: string, uri: string, detail = '') =>
   events.push({ id: eventId++, ts: at(msAgo), site_id: siteId, type, client_ip: ip, country, host, method, uri, rule_id: '', detail })
 
-event((58 - 11) * MIN, S.harbour, 'rate_limit_ban', '45.148.10.82', 'NL', 'booking.keelungharbour.tw', 'GET', "/tours?id=1 UNION SELECT table_name FROM information_schema.tables", 'attack')
+event(4 * MIN, S.harbour, 'rate_limit_ban', '45.148.10.82', 'NL', 'booking.keelungharbour.tw', 'GET', "/tours?id=1 UNION SELECT table_name FROM information_schema.tables", 'attack')
 event(232 * MIN, S.tea, 'rule_block', '103.152.118.40', 'ID', 'lanterntea.com.tw', 'GET', '/wp-admin/install.php', 'Hide the shop admin')
 for (let i = 0; i < 14; i++) {
   const path = pick(['/wp-admin/', '/wp-admin/setup-config.php', '/wp-login.php'])
@@ -182,9 +182,9 @@ for (const e of events) {
   if (e.type === 'allowed_by_rule') b.allow++
 }
 // the banned scanner kept knocking: each attempt during the ban is a rate-limited request
-const banStart = NOW.getTime() - 47 * MIN
+const banStart = NOW.getTime() - 4 * MIN
 for (let i = 0; i < 212; i++) {
-  const b = bucketFor(new Date(banStart + (i / 212) * 40 * MIN).toISOString(), S.harbour)
+  const b = bucketFor(new Date(banStart + (i / 212) * 3.5 * MIN).toISOString(), S.harbour)
   if (b) { b.rate_limit++; b.err4xx++ }
 }
 // gate pages shown to visitors before they signed in

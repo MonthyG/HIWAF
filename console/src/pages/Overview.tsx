@@ -4,7 +4,8 @@ import { api, qs } from '../api'
 import { useApp } from '../context'
 import type { Ban, GroupRow, Overview as Ov, Page, SiteCounts, Certificate } from '../types'
 import { Btn, Empty, IconBtn, ModePill, Segmented, useInterval } from '../ui'
-import { categoryLabel, clock, countryName, daysLeft, int, pct, siteName, when } from '../util'
+import { ago, categoryLabel, clock, countryName, daysLeft, int, pct, siteName, when } from '../util'
+import { Flow, Radar } from './live'
 
 type Range = '24h' | '7d'
 
@@ -93,6 +94,19 @@ export default function Overview() {
     ? <>{top.client_ip} ({countryName(top.country)}) sent <strong>{top.count} attacks</strong> to {siteName(siteById[top.site_id], top.site_id)} {top.count > 1 ? <>between {clock(top.first)} and {clock(top.last)}</> : <>at {clock(top.last)}</>}{topBan ? <>; it is banned until {clock(topBan.until)}</> : null}.</>
     : <>No threats in the last {range === '24h' ? '24 hours' : '7 days'}.</>
 
+  // the newest source on a blocking site decides the status line: under attack within 15 minutes
+  const newest = [...sources].filter((g) => !watchSites.has(g.site_id)).sort((a, b) => b.last.localeCompare(a.last))[0]
+  const active = newest && Date.now() - new Date(newest.last).getTime() < 15 * 60_000 ? newest : undefined
+  const status = !ov ? null : active ? (
+    <p className="alert-line" role="status"><span className="beacon" aria-hidden="true" />
+      Under attack: {active.client_ip} is hitting {siteName(siteById[active.site_id], active.site_id)}, last {ago(active.last)}</p>
+  ) : (
+    <p className="alert-line calm" role="status"><span className="beacon" aria-hidden="true" />
+      {newest ? `Quiet: the last stopped threat was ${ago(newest.last)}` : 'Quiet: nothing has been stopped in this window'}</p>
+  )
+  const last = ov?.series[ov.series.length - 1]
+  const perSecond = last && ov ? last.requests / Math.max(1, ov.step_sec) : 0
+
   const chartDraw = (el: HTMLDivElement) => {
     if (!ov) return
     const step = ov.step_sec
@@ -101,7 +115,7 @@ export default function Overview() {
       return step >= 86400 || (step >= 6 * 3600) ? `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}h` : clock(d)
     })
     const res = window.Charts.line(el, {
-      labels, height: 210, format: window.Charts.fmt.int,
+      labels, height: 300, format: window.Charts.fmt.int,
       series: [
         { name: 'Requests', values: ov.series.map((p) => p.requests) },
         { name: 'Stopped', values: ov.series.map((p) => p.blocked), colour: '#4a8ad6' },
@@ -125,6 +139,7 @@ export default function Overview() {
         <div>
           <h1>Overview</h1>
           <p className="sub">{finding}</p>
+          {status}
         </div>
         <div className="actions">
           <Segmented label="Time window" value={range} onChange={setRange} options={[{ value: '24h', label: '24 hours' }, { value: '7d', label: '7 days' }]} />
@@ -139,6 +154,7 @@ export default function Overview() {
           <h2 id="cp-title">Where requests stopped</h2>
           <span className="meta">Each request passes the stages left to right; the first one that refuses it ends its trip.</span>
         </header>
+        <Flow requests={requests} stops={act} perSecond={perSecond} />
         <div className="checkpoints">
           <div className="cp">
             <div className="cp-name">Requests in</div>
@@ -167,29 +183,40 @@ export default function Overview() {
       </section>
 
       <div className="grid top">
-        <section className="panel span-8" aria-labelledby="tr-title">
+        <section className="panel span-7" aria-labelledby="tr-title">
           <header>
             <h2 id="tr-title">Requests and stops</h2>
             <div className="legend-slot meta" />
           </header>
-          <ChartBox label="Requests and stopped requests over time" draw={chartDraw} deps={[ov]} height={210} />
+          <ChartBox label="Requests and stopped requests over time" draw={chartDraw} deps={[ov]} height={300} />
         </section>
 
-        <section className="panel span-4 flush" aria-labelledby="src-title">
+        <section className="panel span-5" aria-labelledby="src-title">
           <header>
             <h2 id="src-title">Threat sources</h2>
             <Link className="card-link" to="/threats">All threats</Link>
           </header>
-          <div style={{ marginTop: 6 }}>
-            {ranked.length ? ranked.slice(0, 5).map((g) => (
-              <button key={g.site_id + g.client_ip} type="button" className="source" onClick={() => navigate(`/threats?ip=${g.client_ip}&site=${g.site_id}`)}>
-                <span className="ip num">{g.client_ip}</span>
-                <span className="count num">{g.count}</span>
-                <span className="meta truncate">{countryName(g.country)} · {siteName(siteById[g.site_id], g.site_id)}</span>
-                <span className="meta">{when(g.last)}</span>
-              </button>
-            )) : <div style={{ padding: '0 var(--card-pad) var(--card-pad)' }}><Empty>No threats in this window.</Empty></div>}
-          </div>
+          {ranked.length ? (
+            <div className="radar-panel">
+              <Radar sources={ranked} watchSites={watchSites} />
+              <div className="rows">
+                {ranked.slice(0, 5).map((g) => (
+                  <button key={g.site_id + g.client_ip} type="button" className="row" onClick={() => navigate(`/threats?ip=${g.client_ip}&site=${g.site_id}`)}
+                    style={{ width: '100%', border: 0, background: 'none', textAlign: 'left', cursor: 'pointer', padding: '8px 0' }}>
+                    <span className="mode-dot" style={{ background: watchSites.has(g.site_id) ? 'var(--warning)' : 'var(--negative)', flex: 'none' }} aria-hidden="true" />
+                    <span className="grow">
+                      <span className="num" style={{ display: 'block', fontWeight: 600 }}>{g.client_ip}</span>
+                      <span className="meta truncate" style={{ display: 'block' }}>{countryName(g.country)} · {siteName(siteById[g.site_id], g.site_id)}</span>
+                    </span>
+                    <span style={{ textAlign: 'right' }}>
+                      <span className="num" style={{ display: 'block', fontWeight: 500 }}>{g.count}</span>
+                      <span className="meta" style={{ display: 'block', whiteSpace: 'nowrap' }}>{when(g.last)}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : <Empty>No threats in this window.</Empty>}
         </section>
 
         <section className="panel span-7 flush" aria-labelledby="sites-title">
