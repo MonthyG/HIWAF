@@ -3,3 +3,6 @@
 *.log
 *.mmdb
 .superpowers/
+manager/console/dist/*
+!manager/console/dist/.keep
+console/node_modules/

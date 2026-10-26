@@ -11,6 +11,13 @@ function Invoke-Go {
 }
 Push-Location (Join-Path $PSScriptRoot '..')
 try {
+    if (Get-Command npm -ErrorAction SilentlyContinue) {
+        Push-Location console
+        try {
+            & npm ci --no-audit --no-fund; if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
+            & npm run build; if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
+        } finally { Pop-Location }
+    } else { Write-Host "npm not found: the console will show a not built page" }
     Invoke-Go mod tidy
     Invoke-Go build -o bin/hi-waf.exe ./cmd/hi-waf
     Invoke-Go build -o bin/manager.exe ./cmd/manager

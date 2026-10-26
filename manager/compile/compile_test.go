@@ -174,21 +174,99 @@ func TestUploadedWithoutCertErrors(t *testing.T) {
 func TestBlockPageEscapesHTML(t *testing.T) {
 	r := site.Resolve("s_a", site.Doc{Domains: []string{"a.com"}, Upstreams: []string{"1.1.1.1:80"},
 		BlockPage: &site.BlockPageDoc{Title: "<script>", Message: "a & {env.SECRET}"}})
-	h := blockPage(r)
+	h := blockPageHandler(t, r)
 	body := h["body"].(string)
 	assert.Contains(t, body, "&lt;script&gt;")
 	assert.NotContains(t, body, "<script>")
 	assert.Contains(t, body, "a &amp; &#123;env.SECRET&#125;")
 	assert.NotContains(t, body, "{env.SECRET}")
-	assert.Contains(t, body, "Event ID: {http.error.id}")
+	assert.Contains(t, body, "Event ID <code>{http.error.id}</code>")
 	assert.Equal(t, "{http.error.status_code}", h["status_code"])
+}
+
+// blockPageHandler returns the handler of the site's non-429 error route.
+func blockPageHandler(t *testing.T, r site.Resolved) map[string]any {
+	t.Helper()
+	routes := blockPages(r, []any{map[string]any{"host": []string{"a.com"}}})
+	require.Len(t, routes, 2)
+	return routes[1].(map[string]any)["handle"].([]any)[0].(map[string]any)
 }
 
 func TestBlockPageDefaults(t *testing.T) {
 	r := site.Resolve("s_a", site.Doc{Domains: []string{"a.com"}, Upstreams: []string{"1.1.1.1:80"}})
-	body := blockPage(r)["body"].(string)
+	body := blockPageHandler(t, r)["body"].(string)
 	assert.Contains(t, body, "<h1>Request blocked</h1>")
 	assert.Contains(t, body, "<p>Your request was blocked by the web application firewall.</p>")
+}
+
+func TestRateLimitPageMatches429First(t *testing.T) {
+	r := site.Resolve("s_a", site.Doc{Domains: []string{"a.com"}, Upstreams: []string{"1.1.1.1:80"}})
+	routes := blockPages(r, []any{map[string]any{"host": []string{"a.com"}}})
+	m := routes[0].(map[string]any)["match"].([]any)[0].(map[string]any)
+	assert.Equal(t, "{http.error.status_code} == 429", m["expression"])
+	assert.Equal(t, []string{"a.com"}, m["host"])
+	assert.Equal(t, true, routes[0].(map[string]any)["terminal"])
+}
+
+func TestCustomPortsAndConflicts(t *testing.T) {
+	a := site.Resolve("s_aaaaaaaaaaaa", site.Doc{Domains: []string{"a.com"}, Upstreams: []string{"10.0.0.1:80"},
+		Ports: []site.PortDoc{{Port: 8000}, {Port: 8443, HTTPS: true}}})
+	cfg, err := Config([]site.Resolved{a}, nil, baseOptions())
+	require.NoError(t, err)
+	srvs := servers(t, cfg)
+	require.Contains(t, srvs, "p8000")
+	require.Contains(t, srvs, "p8443")
+	assert.Equal(t, map[string]any{"disable": true}, srvs["p8000"].(map[string]any)["automatic_https"])
+	redir := srvs["p8000"].(map[string]any)["routes"].([]any)[0].(map[string]any)["handle"].([]any)[0].(map[string]any)
+	assert.Equal(t, []string{"https://{http.request.host}:8443{http.request.uri}"}, redir["headers"].(map[string]any)["Location"])
+
+	b := site.Resolve("s_bbbbbbbbbbbb", site.Doc{Domains: []string{"b.com"}, Upstreams: []string{"10.0.0.2:80"},
+		TLS: &site.TLSDoc{Mode: "off"}, Ports: []site.PortDoc{{Port: 8443}}})
+	_, err = Config([]site.Resolved{a, b}, nil, baseOptions())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "both HTTP and HTTPS")
+
+	o := baseOptions()
+	o.ReservedPorts = []int{8000}
+	_, err = Config([]site.Resolved{a}, nil, o)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved")
+}
+
+func TestMatchAllSiteIsLastAndLogsByDefault(t *testing.T) {
+	all := site.Resolve("s_aaaaaaaaaaaa", site.Doc{Domains: []string{"*"}, Upstreams: []string{"10.0.0.1:80"},
+		TLS: &site.TLSDoc{Mode: "off"}})
+	named := site.Resolve("s_bbbbbbbbbbbb", site.Doc{Domains: []string{"b.com"}, Upstreams: []string{"10.0.0.2:80"},
+		TLS: &site.TLSDoc{Mode: "off"}})
+	o := baseOptions()
+	o.AccessLog = "/var/log/hi-waf/access.log"
+	cfg, err := Config([]site.Resolved{all, named}, nil, o)
+	require.NoError(t, err)
+	srv := servers(t, cfg)["plain"].(map[string]any)
+	assert.Equal(t, [][]string{{"b.com"}, nil}, routeHosts(srv["routes"].([]any)))
+	logs := srv["logs"].(map[string]any)
+	assert.Equal(t, "s_aaaaaaaaaaaa", logs["default_logger_name"])
+	assert.Equal(t, false, logs["skip_unmapped_hosts"])
+	assert.Equal(t, map[string]any{"b.com": "s_bbbbbbbbbbbb"}, logs["logger_names"])
+}
+
+func TestStaticRedirectAndGlobalCert(t *testing.T) {
+	st := site.Resolve("s_aaaaaaaaaaaa", site.Doc{Domains: []string{"a.com"}, Type: "static"})
+	rd := site.Resolve("s_bbbbbbbbbbbb", site.Doc{Domains: []string{"b.com"}, Type: "redirect",
+		Redirect: &site.RedirectDoc{URL: "https://new.example/", Code: 301, PreservePath: true},
+		TLS:      &site.TLSDoc{Mode: "uploaded", CertID: "c_000000000001"}})
+	_, err := Config([]site.Resolved{st}, nil, baseOptions())
+	require.Error(t, err, "static needs StaticDir")
+
+	o := baseOptions()
+	o.StaticDir = "/data/static"
+	cfg, err := Config([]site.Resolved{st, rd}, map[string]site.Cert{"c_000000000001": {CertPEM: "C", KeyPEM: "K"}}, o)
+	require.NoError(t, err)
+	out := marshal(t, cfg)
+	assert.Contains(t, out, `"handler": "file_server"`)
+	assert.Contains(t, out, `"root": "`+strings.ReplaceAll(filepath.Join("/data/static", "s_aaaaaaaaaaaa"), `\`, `\\`)+`"`)
+	assert.Contains(t, out, `"https://new.example{http.request.uri}"`)
+	assert.Contains(t, out, `"c_000000000001"`)
 }
 
 // routeHosts lists each route's host matcher (nil for the fallback route).
@@ -219,7 +297,7 @@ func TestExactDomainsBeforeWildcards(t *testing.T) {
 	require.NoError(t, err)
 	srv := servers(t, cfg)["waf"].(map[string]any)
 	assert.Equal(t, [][]string{{"a.com"}, {"x.a.com"}, {"*.a.com"}, nil}, routeHosts(srv["routes"].([]any)))
-	assert.Equal(t, [][]string{{"a.com"}, {"x.a.com"}, {"*.a.com"}},
+	assert.Equal(t, [][]string{{"a.com"}, {"a.com"}, {"x.a.com"}, {"x.a.com"}, {"*.a.com"}, {"*.a.com"}},
 		routeHosts(srv["errors"].(map[string]any)["routes"].([]any)))
 }
 

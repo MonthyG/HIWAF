@@ -10,11 +10,13 @@ import (
 	// Coraza WAF handler (http.handlers.waf).
 	_ "github.com/corazawaf/coraza-caddy/v2"
 
-	// HostingInside modules: http.handlers.hi_ratelimit, admin.api.hi_bans,
-	// http.handlers.hi_access.
+	// HostingInside modules: http.handlers.hi_access, hi_ratelimit,
+	// hi_auth, hi_waitroom, hi_challenge, and admin.api.hi_bans.
 	_ "hostinginside/waf/engine/access"
+	_ "hostinginside/waf/engine/auth"
 	_ "hostinginside/waf/engine/challenge"
 	_ "hostinginside/waf/engine/ratelimit"
+	_ "hostinginside/waf/engine/waitroom"
 )
 
 func main() {

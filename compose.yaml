@@ -1,0 +1,30 @@
+# HostingInside WAF. Both services use the host network: the engine binds
+# the sites' ports (80/443 by default) and its admin API on localhost:2019,
+# which only the manager on the same host can reach; no Docker NAT sits in
+# the traffic path.
+name: hiwaf
+
+x-common: &common
+  image: hiwaf:latest
+  network_mode: host
+  restart: unless-stopped
+  volumes:
+    - ${HIWAF_DATA:-/data/hiwaf}:/data:z
+  ulimits:
+    nofile: { soft: 1048576, hard: 1048576 }
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "3" }
+
+services:
+  engine:
+    <<: *common
+    build: .
+    container_name: hiwaf-engine
+    command: ["hi-waf", "run", "--resume"]
+
+  manager:
+    <<: *common
+    container_name: hiwaf-manager
+    command: ["manager", "-config", "/data/manager.json"]
+    depends_on: [engine]

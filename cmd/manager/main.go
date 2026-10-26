@@ -1,46 +1,66 @@
-// Command manager is the HostingInside WAF control plane: it serves the REST
-// API, keeps sites in SQLite, pushes compiled configs to the Caddy engine and
-// ingests the engine's security events.
+// Command manager is the HostingInside WAF control plane: it serves the web
+// console and the REST API, keeps sites in SQLite, pushes compiled configs to
+// the Caddy engine and ingests the engine's security events and access log.
 package main
 
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/oschwald/geoip2-golang"
 
 	"hostinginside/waf/manager/api"
 	"hostinginside/waf/manager/caddyclient"
 	"hostinginside/waf/manager/compile"
+	"hostinginside/waf/manager/console"
 	"hostinginside/waf/manager/ingest"
 	"hostinginside/waf/manager/store"
 )
 
 type config struct {
-	Listen         string   `json:"listen"`
-	DBPath         string   `json:"db_path"`
-	CaddyAdmin     string   `json:"caddy_admin"`
-	EventLog       string   `json:"event_log"`
-	APIKeys        []string `json:"api_keys"`
-	HTTPPort       int      `json:"http_port"`
-	HTTPSPort      int      `json:"https_port"`
-	GeoIPDB        string   `json:"geoip_db"`
-	FeedsDir       string   `json:"feeds_dir"`
-	TrustedProxies []string `json:"trusted_proxies"`
-	ACMEInternal   bool     `json:"acme_internal"`
+	Listen             string   `json:"listen"`
+	DBPath             string   `json:"db_path"`
+	DataDir            string   `json:"data_dir"`
+	CaddyAdmin         string   `json:"caddy_admin"`
+	EventLog           string   `json:"event_log"`
+	AccessLog          string   `json:"access_log"`
+	APIKeys            []string `json:"api_keys"`
+	HTTPPort           int      `json:"http_port"`
+	HTTPSPort          int      `json:"https_port"`
+	GeoIPDB            string   `json:"geoip_db"`
+	FeedsDir           string   `json:"feeds_dir"`
+	StaticDir          string   `json:"static_dir"`
+	TrustedProxies     []string `json:"trusted_proxies"`
+	ACMEInternal       bool     `json:"acme_internal"`
+	TLSCert            string   `json:"tls_cert"`        // console certificate (PEM)
+	TLSKey             string   `json:"tls_key"`         // console key (PEM)
+	SelfSignedTLS      bool     `json:"self_signed_tls"` // generate tls_cert/tls_key in data_dir if missing
+	RetentionDays      int      `json:"retention_days"`  // access-log rows; default 7
+	EventRetentionDays int      `json:"event_retention_days"`
 }
 
 const secretKey = "challenge_secret"
@@ -80,23 +100,27 @@ func loadConfig(path string) (config, error) {
 		}
 	}
 	def(&c.Listen, ":9000")
-	def(&c.CaddyAdmin, "http://127.0.0.1:2019")
+	def(&c.CaddyAdmin, "http://localhost:2019") // Caddy's own default admin address: pushing a different spelling makes Caddy try to bind the port twice
 	def(&c.EventLog, "events.log")
 	def(&c.DBPath, "waf.db")
+	def(&c.DataDir, filepath.Dir(c.DBPath))
 	if c.HTTPPort == 0 {
 		c.HTTPPort = 80
 	}
 	if c.HTTPSPort == 0 {
 		c.HTTPSPort = 443
 	}
+	if c.RetentionDays == 0 {
+		c.RetentionDays = 7
+	}
+	if c.EventRetentionDays == 0 {
+		c.EventRetentionDays = 30
+	}
 	var keys []string
 	for _, k := range c.APIKeys {
 		if k != "" {
 			keys = append(keys, k)
 		}
-	}
-	if len(keys) == 0 {
-		return c, fmt.Errorf("%s: api_keys must list at least one non-empty key", path)
 	}
 	c.APIKeys = keys
 	if !loopback(c.Listen) {
@@ -106,9 +130,16 @@ func loadConfig(path string) (config, error) {
 			}
 		}
 	}
+	if (c.TLSCert == "") != (c.TLSKey == "") && !c.SelfSignedTLS {
+		return c, fmt.Errorf("%s: tls_cert and tls_key must be set together", path)
+	}
+	if c.SelfSignedTLS {
+		def(&c.TLSCert, filepath.Join(c.DataDir, "console.crt"))
+		def(&c.TLSKey, filepath.Join(c.DataDir, "console.key"))
+	}
 	// Caddy runs with its own working directory, so paths it opens are made
-	// absolute here; the manager reads the event log at the same path.
-	for _, p := range []*string{&c.EventLog, &c.GeoIPDB, &c.FeedsDir} {
+	// absolute here; the manager reads the logs at the same paths.
+	for _, p := range []*string{&c.EventLog, &c.AccessLog, &c.GeoIPDB, &c.FeedsDir, &c.StaticDir} {
 		if *p == "" {
 			continue
 		}
@@ -131,15 +162,89 @@ func challengeSecret(ctx context.Context, st *store.Store) (string, error) {
 	return s, st.SetSetting(ctx, secretKey, s)
 }
 
+// ensureSelfSigned writes a 10-year self-signed ECDSA certificate for the
+// console if certPath doesn't exist yet.
+func ensureSelfSigned(certPath, keyPath string) error {
+	if _, err := os.Stat(certPath); err == nil {
+		return nil
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return err
+	}
+	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
+	host, _ := os.Hostname()
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "HostingInside WAF console", Organization: []string{"HostingInside"}},
+		DNSNames:     []string{"localhost", host},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().AddDate(10, 0, 0),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return err
+	}
+	kder, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(certPath), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kder}), 0o600); err != nil {
+		return err
+	}
+	return os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644)
+}
+
 func main() {
 	cfgPath := flag.String("config", "manager.json", "path to the manager config file")
+	reset := flag.Bool("resetadmin", false, "set a new random password for the console user admin and exit")
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	slog.SetDefault(log)
-	if err := run(*cfgPath, log); err != nil {
+	var err error
+	if *reset {
+		err = resetAdmin(*cfgPath)
+	} else {
+		err = run(*cfgPath, log)
+	}
+	if err != nil {
 		log.Error("manager", "err", err)
 		os.Exit(1)
 	}
+}
+
+func resetAdmin(cfgPath string) error {
+	cfg, err := loadConfig(cfgPath)
+	if err != nil {
+		return err
+	}
+	st, err := store.Open(cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	pw, err := api.ResetAdmin(context.Background(), st)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Console user: admin\nNew password: %s\n", pw)
+	return nil
+}
+
+// consolePort returns the port of a listen address, or 0.
+func consolePort(listen string) int {
+	_, p, err := net.SplitHostPort(listen)
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(p)
+	return n
 }
 
 func run(cfgPath string, log *slog.Logger) error {
@@ -149,7 +254,7 @@ func run(cfgPath string, log *slog.Logger) error {
 	}
 	admin, err := url.Parse(cfg.CaddyAdmin)
 	if err != nil || admin.Host == "" {
-		return fmt.Errorf("caddy_admin must be a URL such as http://127.0.0.1:2019, got %q", cfg.CaddyAdmin)
+		return fmt.Errorf("caddy_admin must be a URL such as http://localhost:2019, got %q", cfg.CaddyAdmin)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -165,45 +270,116 @@ func run(cfgPath string, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("challenge secret: %w", err)
 	}
+	if pw, err := api.EnsureAdmin(ctx, st); err != nil {
+		return fmt.Errorf("console admin: %w", err)
+	} else if pw != "" {
+		note := filepath.Join(cfg.DataDir, "initial-admin.txt")
+		_ = os.WriteFile(note, []byte("Console user: admin\nPassword: "+pw+"\n"), 0o600)
+		log.Warn("created console user admin; change its password after the first login",
+			"password", pw, "also_written_to", note)
+	}
+	if cfg.StaticDir != "" {
+		if err := os.MkdirAll(cfg.StaticDir, 0o755); err != nil {
+			return fmt.Errorf("static_dir: %w", err)
+		}
+	}
 
+	var reserved []int
+	_, adminPort, _ := net.SplitHostPort(admin.Host)
+	if n, err := strconv.Atoi(adminPort); err == nil {
+		reserved = append(reserved, n)
+	}
+	if n := consolePort(cfg.Listen); n > 0 {
+		reserved = append(reserved, n)
+	}
 	opt := compile.Options{
 		AdminListen:     admin.Host,
 		HTTPPort:        cfg.HTTPPort,
 		HTTPSPort:       cfg.HTTPSPort,
 		EventLog:        cfg.EventLog,
+		AccessLog:       cfg.AccessLog,
 		ChallengeSecret: secret,
 		GeoIPDB:         cfg.GeoIPDB,
 		FeedsDir:        cfg.FeedsDir,
+		StaticDir:       cfg.StaticDir,
 		TrustedProxies:  cfg.TrustedProxies,
 		ACMEInternal:    cfg.ACMEInternal,
+		ReservedPorts:   reserved,
 	}
 	a := api.New(st, &caddyclient.Client{BaseURL: cfg.CaddyAdmin}, opt, cfg.APIKeys)
 
 	syncCtx, cancel := context.WithTimeout(ctx, time.Minute)
 	if err := a.Sync(syncCtx); err != nil {
 		log.Warn("initial config push failed; the API is up but changes will fail until the engine is reachable", "err", err)
+		go retrySync(ctx, a, log)
 	} else {
 		log.Info("config pushed to engine", "admin", cfg.CaddyAdmin)
 	}
 	cancel()
 
-	tailDone := make(chan struct{})
+	var country func(string) string
+	if cfg.GeoIPDB != "" {
+		geo, err := geoip2.Open(cfg.GeoIPDB)
+		if err != nil {
+			return fmt.Errorf("geoip_db: %w", err)
+		}
+		defer geo.Close()
+		country = func(ip string) string {
+			p := net.ParseIP(ip)
+			if p == nil {
+				return ""
+			}
+			rec, err := geo.Country(p)
+			if err != nil || rec == nil {
+				return ""
+			}
+			return strings.ToUpper(rec.Country.IsoCode)
+		}
+	}
+
+	done := make(chan struct{}, 3)
 	go func() {
-		defer close(tailDone)
-		_ = (&ingest.Tailer{Path: cfg.EventLog, Store: st, Logger: log}).Run(ctx)
+		defer func() { done <- struct{}{} }()
+		_ = (&ingest.Tailer{Path: cfg.EventLog, Store: st, Logger: log, Country: country}).Run(ctx)
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		if cfg.AccessLog == "" {
+			return
+		}
+		_ = (&ingest.Tailer{Path: cfg.AccessLog, Store: st, Logger: log, Access: true,
+			OffsetKey: "access_offset", Country: country}).Run(ctx)
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		purge(ctx, st, cfg, log)
 	}()
 
+	mux := http.NewServeMux()
+	mux.Handle("/api/", a.Handler())
+	mux.Handle("/", console.Handler())
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           a.Handler(),
+		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      90 * time.Second, // a config push may take up to the client's 30s timeout
+		ReadTimeout:       5 * time.Minute, // static site uploads
+		WriteTimeout:      5 * time.Minute,
 		IdleTimeout:       2 * time.Minute,
 	}
 	errc := make(chan error, 1)
+	if cfg.SelfSignedTLS {
+		if err := ensureSelfSigned(cfg.TLSCert, cfg.TLSKey); err != nil {
+			return fmt.Errorf("self-signed console certificate: %w", err)
+		}
+	}
 	go func() {
-		log.Info("manager listening", "addr", cfg.Listen)
+		if cfg.TLSCert != "" {
+			srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+			log.Info("console listening", "url", "https://"+displayAddr(cfg.Listen))
+			errc <- srv.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey)
+			return
+		}
+		log.Info("console listening", "url", "http://"+displayAddr(cfg.Listen))
 		errc <- srv.ListenAndServe()
 	}()
 
@@ -216,9 +392,56 @@ func run(cfgPath string, log *slog.Logger) error {
 		err = srv.Shutdown(shCtx)
 		shCancel()
 	}
-	<-tailDone
+	for i := 0; i < 3; i++ {
+		<-done
+	}
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
 	}
 	return err
+}
+
+func displayAddr(listen string) string {
+	if strings.HasPrefix(listen, ":") {
+		return "<server-ip>" + listen
+	}
+	return listen
+}
+
+// retrySync pushes the config every 5 s until it succeeds; Caddy keeps
+// serving its last config (--resume) meanwhile.
+func retrySync(ctx context.Context, a *api.API, log *slog.Logger) {
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		c, cancel := context.WithTimeout(ctx, time.Minute)
+		err := a.Sync(c)
+		cancel()
+		if err == nil {
+			log.Info("config pushed to engine")
+			return
+		}
+	}
+}
+
+// purge drops old requests, events and sessions once an hour.
+func purge(ctx context.Context, st *store.Store, cfg config, log *slog.Logger) {
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		n := time.Now()
+		if err := st.Purge(ctx, n.AddDate(0, 0, -cfg.RetentionDays), n.AddDate(0, 0, -cfg.EventRetentionDays), n); err != nil && ctx.Err() == nil {
+			log.Error("purge", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }

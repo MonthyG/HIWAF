@@ -130,3 +130,26 @@ func (c *Client) Unban(ctx context.Context, siteID, ip string) (bool, error) {
 	}
 	return false, &LoadError{Status: status, Body: string(resp)}
 }
+
+// WaitRoom is one site's waiting-room occupancy.
+type WaitRoom struct {
+	Active  int `json:"active"`
+	Waiting int `json:"waiting"`
+}
+
+// WaitRooms returns waiting-room occupancy per site. It doubles as the
+// engine health check.
+func (c *Client) WaitRooms(ctx context.Context) (map[string]WaitRoom, error) {
+	status, resp, err := c.do(ctx, http.MethodGet, "/hi/waitroom", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, &LoadError{Status: status, Body: string(resp)}
+	}
+	out := map[string]WaitRoom{}
+	if err := json.Unmarshal(resp, &out); err != nil {
+		return nil, fmt.Errorf("decode waitroom: %w", err)
+	}
+	return out, nil
+}

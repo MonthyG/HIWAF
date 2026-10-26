@@ -5,17 +5,66 @@ A web application firewall for HostingInside customer sites, built on
 OWASP Core Rule Set. It has two binaries:
 
 - **`hi-waf`**: the engine. This is Caddy with coraza-caddy and our own
-  modules compiled in: `hi_access` (IP, country and custom rules),
-  `hi_ratelimit` (access, attack and error limits, plus bans), `hi_challenge`
-  (a JS proof-of-work bot challenge) and the `hi_bans` admin endpoint.
-- **`manager`**: the control plane. It serves a REST API, keeps sites in
-  SQLite, compiles them into one Caddy JSON config, pushes that config to the
-  engine's admin API, and reads the engine's security events into SQLite.
+  modules compiled in:
+  - `hi_access`: IP, country and custom rules
+  - `hi_ratelimit`: access, attack and error limits, plus bans
+  - `hi_auth`: a password gate
+  - `hi_waitroom`: a waiting room
+  - `hi_challenge`: a JS proof-of-work bot challenge
+  - admin endpoints for bans and waiting-room counts
+- **`manager`**: the control plane. It serves the web console and the REST
+  API on one HTTPS port (9443), and keeps sites, certificates, IP groups,
+  custom rules and console users in SQLite. It compiles everything into one
+  Caddy JSON config, pushes it to the engine's admin API, and reads the
+  engine's security events and access log for the statistics and logs.
 
-> **Status:** builds and passes `go vet ./...` and `go test ./...` (including
-> `-race`) on Windows with Go 1.27. It has not yet run against real traffic or
-> on Linux. `go test -short ./...` skips the end-to-end engine tests in
-> `integration/`, which start an in-process Caddy on ports 9080 and 2999.
+The console mirrors SafeLine's menus:
+
+- **Statistics**
+- **Applications**
+- **Attacks**
+- **Allow & Deny**
+- **HTTP Flood**: Rate Limiting and Waiting Room
+- **Anti-Bot**
+- **Auth**
+- **Settings**: certificates, IP groups, account with TOTP 2FA, API tokens
+
+Detection is the OWASP Core Rule Set, not SafeLine's closed-source semantic
+engine. See `docs/superpowers/specs/2026-10-25-safeline-parity-design.md`.
+
+## Install with Docker (recommended)
+
+On a Linux host with Docker and the Compose plugin, from a checkout of this
+repository:
+
+```sh
+sudo ./scripts/install.sh --open-firewall              # Let's Encrypt for site certificates
+sudo ./scripts/install.sh --acme-internal --open-firewall   # lab: the WAF's own CA
+```
+
+The script:
+
+- checks that ports 80, 443 and 9443 are free
+- writes `/data/hiwaf/manager.json`
+- downloads the DB-IP Country Lite database for geo features
+- builds the image and starts the containers `hiwaf-engine` and
+  `hiwaf-manager`, both on the host network
+- prints the console URL `https://<server>:9443` and the generated `admin`
+  password
+
+Run the script again to upgrade; data in `/data/hiwaf` is kept.
+
+To reset the console password:
+
+```sh
+docker exec hiwaf-manager manager -config /data/manager.json -resetadmin
+```
+
+Logs: `docker compose logs -f manager` and `docker compose logs -f engine`.
+
+> **Status:** `go vet ./...` and `go test ./...` pass, including the
+> end-to-end engine tests in `integration/`, which start an in-process Caddy
+> on ports 9080 and 2999 (`go test -short ./...` skips them).
 
 ## Prerequisites
 
@@ -256,7 +305,10 @@ use. You can exempt machine paths with an `allow` rule such as
 
 ## Known limits
 
-- **Not yet compiled or tested** (see the top of this file).
+- **Detection is the OWASP CRS at paranoia 1 by default.** It misses some
+  attacks SafeLine's semantic engine catches (for example `;cat /etc/passwd`
+  in a query parameter) and has more false positives. Raise the detection
+  level per application, and measure false positives before production.
 - **Memory per site.** Each site gets its own Coraza instance with the full
   CRS loaded. Measure memory per site before you put many tenants on one
   node.
@@ -271,15 +323,19 @@ use. You can exempt machine paths with an `allow` rule such as
 - **The JS challenge blocks non-browser clients** (see above).
 - **No Caddyfile support.** The engine is configured only through JSON from
   the manager.
-- **No web dashboard yet.** There is only the API.
+- **Statistics come from the access log.** Rows are kept 7 days
+  (`retention_days`) and events 30 days (`event_retention_days`) in SQLite,
+  which suits one node and modest traffic.
 
 ## Layout
 
 ```
 cmd/hi-waf/     engine main (Caddy + coraza-caddy + hi_* modules)
 cmd/manager/    manager main
-engine/         Caddy modules: access, challenge, ratelimit, events, clientip
-manager/        api, store (SQLite), compile (site -> Caddy JSON), caddyclient, ingest
+engine/         Caddy modules: access, auth, challenge, ratelimit, waitroom, events, clientip
+manager/        api, store (SQLite), compile (site -> Caddy JSON), caddyclient, ingest, console (embedded UI)
+console/        web console source (React + MUI; npm run build -> manager/console/dist)
+scripts/        install.sh (Docker install)
 integration/    end-to-end engine tests (in-process Caddy)
 examples/       manager.json, site-shop.json
 build/          build.sh, build.ps1

@@ -1,0 +1,485 @@
+package api
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	"golang.org/x/crypto/bcrypt"
+
+	"hostinginside/waf/manager/site"
+	"hostinginside/waf/manager/store"
+)
+
+const (
+	// SessionCookie is the console session cookie.
+	SessionCookie = "hiwaf_session"
+	// CSRFHeader must accompany every state-changing request made with a
+	// session cookie; browsers can't send it cross-site without CORS.
+	CSRFHeader = "X-Requested-With"
+	csrfValue  = "hiwaf"
+
+	sessionTTL     = 12 * time.Hour
+	minPassword    = 8
+	maxFailures    = 5
+	failureWindow  = 15 * time.Minute
+	issuer         = "HostingInside WAF"
+	defaultAdmin   = "admin"
+	principalKey   = ctxKey("principal")
+	tokenPrefix    = "hiw_"
+	sessionIDBytes = 32
+)
+
+type ctxKey string
+
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("hiwaf-no-such-user"), bcrypt.DefaultCost)
+
+// principal is who is calling: a console user, or an API key/token.
+type principal struct {
+	User    string // console username; empty for keys and tokens
+	Session string // hash of the session ID, for session callers
+}
+
+func hashHex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+func randomString(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b) // never fails since Go 1.24
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// publicRoutes need no authentication.
+var publicRoutes = map[string]bool{
+	"POST /api/v1/auth/login": true,
+}
+
+func (a *API) authenticate(r *http.Request) (principal, bool) {
+	if tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && tok != "" {
+		sum := sha256.Sum256([]byte(tok))
+		match := 0
+		for _, k := range a.keys {
+			match |= subtle.ConstantTimeCompare(sum[:], k[:])
+		}
+		if match == 1 {
+			return principal{}, true
+		}
+		if strings.HasPrefix(tok, tokenPrefix) {
+			if _, ok, err := a.st.TokenByHash(r.Context(), hex.EncodeToString(sum[:])); err == nil && ok {
+				return principal{}, true
+			}
+		}
+		return principal{}, false
+	}
+	if ck, err := r.Cookie(SessionCookie); err == nil && ck.Value != "" {
+		h := hashHex(ck.Value)
+		if user, ok, err := a.st.SessionUser(r.Context(), h, time.Now()); err == nil && ok {
+			return principal{User: user, Session: h}, true
+		}
+	}
+	return principal{}, false
+}
+
+func (a *API) auth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if publicRoutes[r.Method+" "+r.URL.Path] {
+			next.ServeHTTP(w, r)
+			return
+		}
+		p, ok := a.authenticate(r)
+		if !ok {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeJSON(w, http.StatusUnauthorized, errBody{Error: "missing or invalid credentials"})
+			return
+		}
+		if p.Session != "" && r.Method != http.MethodGet && r.Method != http.MethodHead &&
+			r.Header.Get(CSRFHeader) != csrfValue {
+			writeJSON(w, http.StatusForbidden, errBody{Error: "missing " + CSRFHeader + " header"})
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey, p)))
+	})
+}
+
+func principalOf(r *http.Request) principal {
+	p, _ := r.Context().Value(principalKey).(principal)
+	return p
+}
+
+// --- admin bootstrap ---------------------------------------------------------
+
+// EnsureAdmin creates the "admin" console user with a random password when no
+// user exists, returning that password; it returns "" otherwise.
+func EnsureAdmin(ctx context.Context, st *store.Store) (string, error) {
+	n, err := st.CountUsers(ctx)
+	if err != nil || n > 0 {
+		return "", err
+	}
+	return ResetAdmin(ctx, st)
+}
+
+// ResetAdmin sets a new random password for "admin" (creating it if needed),
+// turns off its TOTP and ends its sessions. It returns the password.
+func ResetAdmin(ctx context.Context, st *store.Store) (string, error) {
+	pw := randomString(12)
+	h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	u, err := st.GetUser(ctx, defaultAdmin)
+	if err != nil && !errors.Is(err, store.ErrNoUser) {
+		return "", err
+	}
+	u.Username, u.Hash, u.TOTPEnabled, u.TOTPSecret = defaultAdmin, string(h), false, ""
+	if err := st.PutUser(ctx, u); err != nil {
+		return "", err
+	}
+	return pw, st.DeleteUserSessions(ctx, defaultAdmin, "")
+}
+
+// --- login limiter -----------------------------------------------------------
+
+// loginLimiter counts failed logins per client IP.
+type loginLimiter struct {
+	mu   sync.Mutex
+	fail map[string][]time.Time
+}
+
+func newLoginLimiter() *loginLimiter { return &loginLimiter{fail: map[string][]time.Time{}} }
+
+func (l *loginLimiter) recent(key string, now time.Time) []time.Time {
+	kept := l.fail[key][:0]
+	for _, t := range l.fail[key] {
+		if now.Sub(t) < failureWindow {
+			kept = append(kept, t)
+		}
+	}
+	if len(kept) == 0 {
+		delete(l.fail, key)
+		return nil
+	}
+	l.fail[key] = kept
+	return kept
+}
+
+func (l *loginLimiter) blocked(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.recent(key, now)) >= maxFailures
+}
+
+func (l *loginLimiter) failed(key string, now time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.fail[key] = append(l.recent(key, now), now)
+}
+
+func (l *loginLimiter) reset(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.fail, key)
+}
+
+func remoteIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// --- login / logout / me -----------------------------------------------------
+
+type loginReq struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	TOTP     string `json:"totp,omitempty"`
+}
+
+type meView struct {
+	Username    string `json:"username"`
+	TOTPEnabled bool   `json:"totp_enabled"`
+	Kind        string `json:"kind"` // user | token
+}
+
+func (a *API) login(w http.ResponseWriter, r *http.Request) {
+	var req loginReq
+	if err := decode(w, r, &req); err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	key, t := remoteIP(r), time.Now()
+	if a.limiter.blocked(key, t) {
+		writeJSON(w, http.StatusTooManyRequests, errBody{Error: "too many failed logins; try again in 15 minutes"})
+		return
+	}
+	u, err := a.st.GetUser(r.Context(), req.Username)
+	if err != nil && !errors.Is(err, store.ErrNoUser) {
+		a.writeErr(w, err)
+		return
+	}
+	hash := u.Hash
+	if hash == "" {
+		hash = string(dummyHash) // a missing user costs as much as a real one
+	}
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)) != nil || u.Username == "" {
+		a.limiter.failed(key, t)
+		writeJSON(w, http.StatusUnauthorized, errBody{Error: "wrong username or password"})
+		return
+	}
+	if u.TOTPEnabled {
+		if req.TOTP == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "two-factor code required", "totp_required": true})
+			return
+		}
+		if !validTOTP(u.TOTPSecret, req.TOTP, t) {
+			a.limiter.failed(key, t)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "wrong two-factor code", "totp_required": true})
+			return
+		}
+	}
+	a.limiter.reset(key)
+	sid := randomString(sessionIDBytes)
+	exp := t.Add(sessionTTL)
+	if err := a.st.CreateSession(r.Context(), hashHex(sid), u.Username, exp); err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: SessionCookie, Value: sid, Path: "/", Expires: exp, MaxAge: int(sessionTTL.Seconds()),
+		HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode,
+	})
+	writeJSON(w, http.StatusOK, meView{Username: u.Username, TOTPEnabled: u.TOTPEnabled, Kind: "user"})
+}
+
+func (a *API) logout(w http.ResponseWriter, r *http.Request) {
+	if p := principalOf(r); p.Session != "" {
+		_ = a.st.DeleteSession(r.Context(), p.Session)
+	}
+	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) me(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	if p.User == "" {
+		writeJSON(w, http.StatusOK, meView{Username: "api", Kind: "token"})
+		return
+	}
+	u, err := a.st.GetUser(r.Context(), p.User)
+	if err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, meView{Username: u.Username, TOTPEnabled: u.TOTPEnabled, Kind: "user"})
+}
+
+// currentUser returns the calling console user, or a 403 for API keys.
+func (a *API) currentUser(r *http.Request) (store.User, error) {
+	p := principalOf(r)
+	if p.User == "" {
+		return store.User{}, &httpError{status: http.StatusForbidden, msg: "only console users can manage their account"}
+	}
+	return a.st.GetUser(r.Context(), p.User)
+}
+
+type passwordReq struct {
+	Old string `json:"old_password"`
+	New string `json:"new_password"`
+}
+
+func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
+	var req passwordReq
+	if err := decode(w, r, &req); err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	u, err := a.currentUser(r)
+	if err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(u.Hash), []byte(req.Old)) != nil {
+		a.writeErr(w, badRequest("old_password", "is wrong"))
+		return
+	}
+	if utf8.RuneCountInString(req.New) < minPassword || len(req.New) > 72 {
+		a.writeErr(w, badRequest("new_password", fmt.Sprintf("must be %d-72 characters", minPassword)))
+		return
+	}
+	h, err := bcrypt.GenerateFromPassword([]byte(req.New), bcrypt.DefaultCost)
+	if err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	u.Hash = string(h)
+	if err := a.st.PutUser(r.Context(), u); err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	// Other sessions end; this one stays.
+	if err := a.st.DeleteUserSessions(r.Context(), u.Username, principalOf(r).Session); err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- TOTP --------------------------------------------------------------------
+
+type totpSetupView struct {
+	Secret string `json:"secret"`
+	URL    string `json:"otpauth_url"`
+}
+
+func (a *API) totpSetup(w http.ResponseWriter, r *http.Request) {
+	u, err := a.currentUser(r)
+	if err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	if u.TOTPEnabled {
+		a.writeErr(w, &httpError{status: http.StatusConflict, msg: "two-factor authentication is already on"})
+		return
+	}
+	u.TOTPSecret = newTOTPSecret()
+	if err := a.st.PutUser(r.Context(), u); err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	label := url.PathEscape(issuer + ":" + u.Username)
+	q := url.Values{"secret": {u.TOTPSecret}, "issuer": {issuer}}
+	writeJSON(w, http.StatusOK, totpSetupView{Secret: u.TOTPSecret, URL: "otpauth://totp/" + label + "?" + q.Encode()})
+}
+
+type codeReq struct {
+	Code     string `json:"code,omitempty"`
+	Password string `json:"password,omitempty"`
+}
+
+func (a *API) totpEnable(w http.ResponseWriter, r *http.Request) {
+	var req codeReq
+	if err := decode(w, r, &req); err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	u, err := a.currentUser(r)
+	if err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	if u.TOTPSecret == "" {
+		a.writeErr(w, badRequest("", "call totp/setup first"))
+		return
+	}
+	if !validTOTP(u.TOTPSecret, req.Code, time.Now()) {
+		a.writeErr(w, badRequest("code", "is wrong"))
+		return
+	}
+	u.TOTPEnabled = true
+	if err := a.st.PutUser(r.Context(), u); err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) totpDisable(w http.ResponseWriter, r *http.Request) {
+	var req codeReq
+	if err := decode(w, r, &req); err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	u, err := a.currentUser(r)
+	if err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(u.Hash), []byte(req.Password)) != nil {
+		a.writeErr(w, badRequest("password", "is wrong"))
+		return
+	}
+	u.TOTPEnabled, u.TOTPSecret = false, ""
+	if err := a.st.PutUser(r.Context(), u); err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- API tokens --------------------------------------------------------------
+
+type tokenView struct {
+	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	Created  time.Time  `json:"created"`
+	LastUsed *time.Time `json:"last_used,omitempty"`
+	Token    string     `json:"token,omitempty"` // only in the create response
+}
+
+func (a *API) listTokens(w http.ResponseWriter, r *http.Request) {
+	ts, err := a.st.ListTokens(r.Context())
+	if err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	out := make([]tokenView, 0, len(ts))
+	for _, t := range ts {
+		v := tokenView{ID: t.ID, Name: t.Name, Created: t.Created}
+		if !t.LastUsed.IsZero() {
+			lu := t.LastUsed
+			v.LastUsed = &lu
+		}
+		out = append(out, v)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *API) createToken(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := decode(w, r, &req); err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" || utf8.RuneCountInString(req.Name) > 64 {
+		a.writeErr(w, badRequest("name", "must be 1-64 characters"))
+		return
+	}
+	secret := tokenPrefix + randomString(24)
+	id := site.NewObjectID("t")
+	if err := a.st.CreateToken(r.Context(), id, req.Name, hashHex(secret)); err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, tokenView{ID: id, Name: req.Name, Created: now(), Token: secret})
+}
+
+func (a *API) deleteToken(w http.ResponseWriter, r *http.Request) {
+	ok, err := a.st.DeleteToken(r.Context(), r.PathValue("id"))
+	if err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	if !ok {
+		a.writeErr(w, errNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

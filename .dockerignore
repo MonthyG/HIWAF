@@ -1,0 +1,8 @@
+.git
+bin
+console/node_modules
+manager/console/dist/*
+!manager/console/dist/.keep
+*.db
+*.log
+docs

@@ -147,6 +147,7 @@ func (c *Challenge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddy
 		if err != nil {
 			return caddyhttp.Error(http.StatusInternalServerError, err)
 		}
+		events.Tag(r, events.ActionChallenge, "challenge_issued")
 		h := w.Header()
 		h.Set("Content-Type", "text/html; charset=utf-8")
 		h.Set("Cache-Control", "no-store")
@@ -157,11 +158,13 @@ func (c *Challenge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddy
 		return nil
 	}
 
+	events.Tag(r, events.ActionChallenge, "challenge_required")
 	return caddyhttp.Error(http.StatusForbidden, errors.New("challenge required"))
 }
 
 func (c *Challenge) fail(r *http.Request, why string) error {
 	c.emit(r, events.TypeChallengeFailed, why)
+	events.Tag(r, events.ActionChallenge, events.TypeChallengeFailed)
 	return caddyhttp.Error(http.StatusForbidden, errors.New("challenge failed"))
 }
 

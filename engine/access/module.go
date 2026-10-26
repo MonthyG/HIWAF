@@ -169,8 +169,11 @@ func (a *Access) Cleanup() error {
 	return nil
 }
 
-func (a *Access) deny(r *http.Request, typ string) error {
-	events.Emit(a.logger, events.FromRequest(r, typ, a.SiteID))
+func (a *Access) deny(r *http.Request, typ, detail string) error {
+	e := events.FromRequest(r, typ, a.SiteID)
+	e.Msg = detail
+	events.Emit(a.logger, e)
+	events.Tag(r, events.ActionDeny, typ)
 	return caddyhttp.Error(http.StatusForbidden, errors.New("access denied"))
 }
 
@@ -183,10 +186,11 @@ func (a *Access) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhtt
 
 	if a.allow.Contains(ip) {
 		caddyhttp.SetVar(r.Context(), SkipVar, "true")
+		events.Tag(r, events.ActionAllow, "")
 		return next.ServeHTTP(w, r)
 	}
 	if a.block.Contains(ip) {
-		return a.deny(r, events.TypeIPBlock)
+		return a.deny(r, events.TypeIPBlock, "")
 	}
 
 	country := ""
@@ -195,10 +199,10 @@ func (a *Access) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhtt
 	}
 	if country != "" {
 		if len(a.allowC) > 0 && !a.allowC[country] {
-			return a.deny(r, events.TypeGeoBlock)
+			return a.deny(r, events.TypeGeoBlock, country)
 		}
 		if a.blockC[country] {
-			return a.deny(r, events.TypeGeoBlock)
+			return a.deny(r, events.TypeGeoBlock, country)
 		}
 	}
 
@@ -207,9 +211,12 @@ func (a *Access) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhtt
 			continue
 		}
 		if rule.action == "block" {
-			return a.deny(r, events.TypeRuleBlock)
+			return a.deny(r, events.TypeRuleBlock, rule.name)
 		}
-		events.Emit(a.logger, events.FromRequest(r, events.TypeAllowedByRule, a.SiteID))
+		e := events.FromRequest(r, events.TypeAllowedByRule, a.SiteID)
+		e.Msg = rule.name
+		events.Emit(a.logger, e)
+		events.Tag(r, events.ActionAllow, events.TypeAllowedByRule)
 		caddyhttp.SetVar(r.Context(), SkipVar, "true")
 		return next.ServeHTTP(w, r)
 	}

@@ -175,3 +175,73 @@ func TestParseCorazaHardening(t *testing.T) {
 		t.Errorf("ev = %+v ok = %v", ev, ok)
 	}
 }
+
+func TestParseCorazaMatchEnriched(t *testing.T) {
+	line := `{"ts":1761200002,"logger":"http.handlers.waf","msg":"[client \"1.2.3.4\"] Coraza: Warning. x [id \"942100\"] [msg \"SQLi\"] [data \"Matched Data: 1' OR found within ARGS:id\"] [severity \"critical\"] [hostname \"Shop.Example.com\"] [uri \"/?id=1\"] [unique_id \"s_aaaaaaaaaaaa-0123456789abcdef\"]"}`
+	ev, ok := ParseLine([]byte(line))
+	if !ok {
+		t.Fatal("not parsed")
+	}
+	if ev.TxID != "s_aaaaaaaaaaaa-0123456789abcdef" || ev.Severity != 2 || ev.Category != "sqli" ||
+		ev.Data != "Matched Data: 1' OR found within ARGS:id" || ev.Host != "Shop.Example.com" {
+		t.Fatalf("ev = %+v", ev)
+	}
+}
+
+func TestCategory(t *testing.T) {
+	for id, want := range map[string]string{"942100": "sqli", "941110": "xss", "949110": "score",
+		"980170": "score", "920350": "protocol", "911100": "", "x": ""} {
+		if got := Category(id); got != want {
+			t.Errorf("Category(%s) = %q, want %q", id, got, want)
+		}
+	}
+}
+
+func TestParseAccess(t *testing.T) {
+	line := `{"level":"info","ts":1761200000.25,"logger":"http.log.access.s_aaaaaaaaaaaa","msg":"handled request",` +
+		`"request":{"remote_ip":"10.0.0.1","client_ip":"1.2.3.4","method":"GET","host":"Shop.example.com:8443","uri":"/p?q=1",` +
+		`"headers":{"User-Agent":["Mozilla/5.0"],"Referer":["https://google.com/"]}},"duration":0.012,"size":512,"status":403,` +
+		`"resp_headers":{"Content-Type":["text/html; charset=utf-8"]},"hi_action":"block","hi_type":"waf_block","hi_tx":"s_aaaaaaaaaaaa-01"}`
+	r, ok := ParseAccess([]byte(line))
+	if !ok {
+		t.Fatal("not parsed")
+	}
+	if r.SiteID != "s_aaaaaaaaaaaa" || r.ClientIP != "1.2.3.4" || r.Host != "shop.example.com" || r.Status != 403 ||
+		r.Action != "block" || r.TxID != "s_aaaaaaaaaaaa-01" || !r.HTML || r.UA != "Mozilla/5.0" ||
+		r.Referer != "https://google.com/" || r.DurMS != 12 || r.Bytes != 512 {
+		t.Fatalf("r = %+v", r)
+	}
+	if _, ok := ParseAccess([]byte(`{"logger":"http.log.access","request":{}}`)); ok {
+		t.Fatal("unmapped access line parsed")
+	}
+}
+
+func TestTailerAccessLog(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	path := filepath.Join(t.TempDir(), "access.log")
+	line := `{"ts":1761200000,"logger":"http.log.access.s_aaaaaaaaaaaa","request":{"client_ip":"1.2.3.4","method":"GET","host":"a.com","uri":"/"},"status":200,"resp_headers":{"Content-Type":["text/html"]}}` + "\n"
+	if err := os.WriteFile(path, []byte(line+line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tl := &Tailer{Path: path, Store: st, Access: true, OffsetKey: "access_offset",
+		Country: func(string) string { return "TW" }}
+	if err := tl.Once(ctx); err != nil {
+		t.Fatal(err)
+	}
+	o, err := st.Overview(ctx, store.RequestFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Requests != 2 || o.PV != 2 || o.UniqueIPs != 1 {
+		t.Fatalf("overview = %+v", o)
+	}
+	top, _ := st.TopRequests(ctx, store.RequestFilter{}, store.DimCountry, 5)
+	if len(top) != 1 || top[0].Key != "TW" {
+		t.Fatalf("top = %+v", top)
+	}
+}

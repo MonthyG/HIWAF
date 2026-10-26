@@ -26,8 +26,10 @@ import (
 
 	// hi_access, hi_challenge, hi_ratelimit and admin.api.hi_bans.
 	_ "hostinginside/waf/engine/access"
+	_ "hostinginside/waf/engine/auth"
 	_ "hostinginside/waf/engine/challenge"
 	_ "hostinginside/waf/engine/ratelimit"
+	_ "hostinginside/waf/engine/waitroom"
 
 	"hostinginside/waf/manager/compile"
 	"hostinginside/waf/manager/site"
@@ -42,8 +44,9 @@ const (
 
 // engine is one running Caddy instance for a test.
 type engine struct {
-	cfg      []byte
-	eventLog string
+	cfg       []byte
+	accessLog string
+	eventLog  string
 }
 
 // startEngine compiles siteJSON (a site.Doc) as site id with TLS off and
@@ -82,12 +85,13 @@ func startEngine(t *testing.T, id, siteJSON string) *engine {
 		t.Fatalf("validate all: %v", err)
 	}
 
-	e := &engine{eventLog: filepath.Join(dir, "events.log")}
+	e := &engine{eventLog: filepath.Join(dir, "events.log"), accessLog: filepath.Join(dir, "access.log")}
 	cfg, err := compile.Config(resolved, nil, compile.Options{
 		AdminListen:     "localhost:2999",
 		HTTPPort:        9080,
 		HTTPSPort:       9443,
 		EventLog:        e.eventLog,
+		AccessLog:       e.accessLog,
 		ChallengeSecret: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)),
 	})
 	if err != nil {
