@@ -183,7 +183,7 @@ export default function Overview() {
       </section>
 
       <div className="grid top">
-        <section className="panel span-7" aria-labelledby="tr-title">
+        <section className="panel span-6" aria-labelledby="tr-title">
           <header>
             <h2 id="tr-title">Requests and stops</h2>
             <div className="legend-slot meta" />
@@ -191,7 +191,7 @@ export default function Overview() {
           <ChartBox label="Requests and stopped requests over time" draw={chartDraw} deps={[ov]} height={300} />
         </section>
 
-        <section className="panel span-5" aria-labelledby="src-title">
+        <section className="panel span-6" aria-labelledby="src-title">
           <header>
             <h2 id="src-title">Threat sources</h2>
             <Link className="card-link" to="/threats">All threats</Link>

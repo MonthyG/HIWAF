@@ -56,11 +56,18 @@ a { color: inherit; text-decoration: none; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* ---------- shell: a top bar with the menu button; the menu is a drawer ---------- */
-.app { min-height: 100svh; }
+.app { display: grid; grid-template-columns: 252px minmax(0, 1fr); min-height: 100svh; }
+.app.sidebar-hidden { grid-template-columns: minmax(0, 1fr); }
+.app.sidebar-hidden .sidebar { display: none; }
+.main-col { min-width: 0; }
+.sidebar { position: sticky; top: 0; height: 100svh; display: flex; flex-direction: column; padding: 0 0 16px; background: var(--surface); border-right: 1px solid var(--border); }
+.sidebar-brand { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 20px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+.topbar-brand { display: none !important; }
+.app.sidebar-hidden .topbar-brand { display: flex !important; }
 .topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 var(--pad) 0 calc(var(--pad) - 10px); background: var(--ground); border-bottom: 1px solid var(--border); color: var(--muted); font-size: var(--fs-small); }
 .topbar .brand { display: flex; align-items: center; gap: 10px; }
 .topbar .product, .drawer .product { color: var(--text); font-weight: 600; font-size: 14px; }
-.topbar .edge { padding-left: 12px; border-left: 1px solid var(--border); }
+.app.sidebar-hidden .topbar .edge { padding-left: 12px; border-left: 1px solid var(--border); }
 .topbar .spacer { flex: 1; }
 .menu-btn { display: grid; align-content: center; gap: 4px; width: 40px; height: 40px; padding: 0 10px; border: 0; border-radius: 999px; background: transparent; cursor: pointer; }
 .menu-btn span { display: block; height: 1.5px; border-radius: 1px; background: var(--text); transition: transform var(--t-ui) var(--ease-out); }
@@ -304,6 +311,10 @@ dialog::backdrop { background: rgba(0, 0, 0, .6); }
 }
 @media (max-width: 860px) {
   .canvas { padding: 16px 16px 48px; }
+  .app, .app.sidebar-hidden { grid-template-columns: minmax(0, 1fr); }
+  .sidebar { display: none; }
+  .topbar-brand { display: flex !important; }
+  .topbar .edge { display: none; }
   .topbar { padding: 0 16px 0 6px; }
   .kpis { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kpi + .kpi { border-left: 0; }
