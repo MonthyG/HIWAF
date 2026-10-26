@@ -89,8 +89,14 @@ function Drawer({ open, onClose, counts }: { open: boolean; onClose: () => void;
   useEffect(() => {
     const d = ref.current
     if (!d) return
-    if (open && !d.open) d.showModal()
-    if (!open && d.open) d.close()
+    if (open && !d.open) { d.classList.remove('closing'); d.showModal() }
+    if (!open && d.open) {
+      // slide out first, then close; with reduced motion close at once
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { d.close(); return }
+      d.classList.add('closing')
+      const t = setTimeout(() => { d.classList.remove('closing'); d.close() }, 200)
+      return () => clearTimeout(t)
+    }
   }, [open])
   return (
     <dialog ref={ref} className="drawer" aria-label="Menu" onClose={onClose} onCancel={(e) => { e.preventDefault(); onClose() }}
@@ -118,6 +124,13 @@ export default function Shell() {
   const loc = useLocation()
   const [drawer, setDrawer] = useState(() => DEMO && new URLSearchParams(window.location.hash.split('?')[1]).get('menu') === '1')
   const [hidden, setHidden] = useState(readHidden)
+  const [phone, setPhone] = useState(() => window.matchMedia(PHONE).matches)
+  useEffect(() => {
+    const m = window.matchMedia(PHONE)
+    const on = () => setPhone(m.matches)
+    m.addEventListener('change', on)
+    return () => m.removeEventListener('change', on)
+  }, [])
   const [counts, setCounts] = useState<SiteCounts>({})
   useEffect(() => { if (!DEMO || !loc.search.includes('menu=1')) setDrawer(false) }, [loc.pathname, loc.search])
   useEffect(() => { api.get<SiteCounts>('/site-counts').then(setCounts).catch(() => {}) }, [loc.pathname, sites.length])
@@ -144,7 +157,7 @@ export default function Shell() {
       </aside>
       <div className="main-col">
         <header className="topbar">
-          <button type="button" className="menu-btn" aria-label={hidden ? 'Show the menu' : 'Menu'} onClick={toggle}>
+          <button type="button" className="menu-btn" aria-label={hidden ? 'Show the menu' : 'Hide the menu'} aria-expanded={!hidden && !phone} onClick={toggle}>
             <span /><span /><span />
           </button>
           <NavLink to="/overview" className="brand topbar-brand" aria-label="HostingInside WAF, overview"><Mark size={24} /><span className="product">HostingInside WAF</span></NavLink>
