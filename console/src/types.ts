@@ -36,7 +36,9 @@ export interface Overview {
   series: Point[]; qps: Point[]
   countries: CountView[]; status: CountView[]; os: CountView[]; browsers: CountView[]; referrers: CountView[]
   sites: CountView[]; pages: CountView[]; ips: CountView[]; attack_types: CountView[]; actions: CountView[]
+  rules: RuleHit[]; p95_ms: number
 }
+export interface RuleHit { id: string; msg: string; category: string; count: number }
 export interface Page<T> { items: T[]; total: number }
 export interface Attack {
   tx_id: string; ts: string; site_id: string; client_ip: string; country: string; categories: string[]
@@ -62,7 +64,7 @@ export interface GlobalRule {
 export interface Ban { ip: string; until: string }
 export interface SystemInfo {
   version: string; started: string; engine_ok: boolean; engine_error?: string; geoip: boolean; access_log: boolean
-  static_sites: boolean; http_port: number; https_port: number; sites: number
+  static_sites: boolean; http_port: number; https_port: number; sites: number; ruleset?: string
 }
 export interface Me { username: string; totp_enabled: boolean; kind: 'user' | 'token' }
 export interface Token { id: string; name: string; created: string; last_used?: string; token?: string }

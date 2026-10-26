@@ -34,6 +34,10 @@ const maxBody = 1 << 20
 // Version is reported by GET /api/v1/system.
 var Version = "1.0.0"
 
+// Ruleset names the OWASP Core Rule Set the engine is built with; a test keeps
+// it in step with go.mod's coraza-coreruleset version.
+const Ruleset = "CRS 4.25.0"
+
 // Loader pushes configs to the engine and manages its bans.
 // *caddyclient.Client implements it.
 type Loader interface {

@@ -203,3 +203,30 @@ func (s *Store) AttackCounts(ctx context.Context, siteID string, since time.Time
 	}
 	return out, rows.Err()
 }
+
+// RuleHit is one rule's match count, with the rule's message.
+type RuleHit struct {
+	RuleID, Msg, Category string
+	N                     int
+}
+
+// RuleHits returns the rules that matched most since a time (zero = all), for
+// one site or all sites when siteID is empty. Anomaly-score rules are left out.
+func (s *Store) RuleHits(ctx context.Context, siteID string, since time.Time, limit int) ([]RuleHit, error) {
+	clause, args := where(siteID, "waf_match", "", since)
+	rows, err := s.db.QueryContext(ctx, `SELECT rule_id, MAX(msg), MAX(category), COUNT(*) AS n FROM events`+clause+
+		` AND rule_id <> '' AND category <> 'score' GROUP BY rule_id ORDER BY n DESC, rule_id ASC LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RuleHit
+	for rows.Next() {
+		var h RuleHit
+		if err := rows.Scan(&h.RuleID, &h.Msg, &h.Category, &h.N); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}

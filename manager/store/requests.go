@@ -217,3 +217,17 @@ func (s *Store) RequestByTx(ctx context.Context, tx string) (Request, bool, erro
 	r.TS, r.HTML = time.UnixMilli(ts).UTC(), html == 1
 	return r, true, nil
 }
+
+// LatencyP95 returns the 95th percentile request duration in milliseconds for
+// requests matching f, or 0 when there are none.
+func (s *Store) LatencyP95(ctx context.Context, f RequestFilter) (float64, error) {
+	clause, args := f.where()
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM requests`+clause, args...).Scan(&n); err != nil || n == 0 {
+		return 0, err
+	}
+	var ms float64
+	err := s.db.QueryRowContext(ctx, `SELECT dur_ms FROM requests`+clause+` ORDER BY dur_ms LIMIT 1 OFFSET ?`,
+		append(args, (n*95-1)/100)...).Scan(&ms)
+	return ms, err
+}

@@ -161,37 +161,35 @@ export default function Site() {
 function Traffic({ site, ov, recent }: { site: SiteView; ov: Overview | null; recent: Attack[] }) {
   const req = ov?.requests ?? 0
   return (
-    <div className="stack">
-      <div className="kpis">
+    <div className="sheet">
+      <div className="kpis span-12">
         <div className="kpi"><div className="kpi-label">Requests, 24 h</div><div className="kpi-value num">{int(req)}</div></div>
         <div className="kpi"><div className="kpi-label">Refused or stopped</div><div className="kpi-value num">{int(ov?.blocked ?? 0)}<small>{pct(ov?.blocked ?? 0, req)}</small></div></div>
         <div className="kpi"><div className="kpi-label">Client IPs</div><div className="kpi-value num">{int(ov?.unique_ips ?? 0)}</div></div>
         <div className="kpi"><div className="kpi-label">4xx answers</div><div className="kpi-value num">{int(ov?.err_4xx ?? 0)}</div></div>
         <div className="kpi"><div className="kpi-label">5xx answers</div><div className={'kpi-value num' + ((ov?.err_5xx ?? 0) > 0 ? ' neg-text' : '')}>{int(ov?.err_5xx ?? 0)}</div></div>
       </div>
-      <div className="grid top">
-        <section className="panel span-7">
-          <header><h2>Requests, 24 h</h2><span className="meta">stopped in blue</span></header>
-          <ChartBox label="Requests and stopped requests" deps={[ov]} height={200} draw={(el) => {
-            if (!ov) return
-            window.Charts.line(el, { labels: ov.series.map((p) => clock(p.t)), height: 200, series: [
-              { name: 'Requests', values: ov.series.map((p) => p.requests) },
-              { name: 'Stopped', values: ov.series.map((p) => p.blocked), colour: '#4a8ad6' },
-            ] })
-          }} />
-        </section>
-        <section className="panel span-5 flush">
-          <header><h2>Latest threats</h2><Link className="card-link" to={`/threats?site=${site.id}`}>All</Link></header>
-          <div className="rows" style={{ padding: '4px var(--card-pad) 8px' }}>
-            {recent.length ? recent.map((a) => (
-              <div key={a.tx_id} className="row">
-                <div className="grow"><div className="truncate">{categoryLabel(a.categories[0] ?? '')} from <span className="num">{a.client_ip}</span></div><div className="muted truncate">{a.method} {a.uri}</div></div>
-                <div style={{ textAlign: 'right' }}><div className={a.blocked ? '' : 'warn-text'}>{a.blocked ? 'Stopped' : 'Watched'}</div><div className="muted num">{when(a.ts)}</div></div>
-              </div>
-            )) : <Empty>No threats on this site.</Empty>}
-          </div>
-        </section>
-      </div>
+      <section className="panel span-7">
+        <header><h2>Requests, 24 h</h2><span className="meta">stopped in blue</span></header>
+        <ChartBox label="Requests and stopped requests" deps={[ov]} height={200} draw={(el) => {
+          if (!ov) return
+          window.Charts.line(el, { labels: ov.series.map((p) => clock(p.t)), height: 200, series: [
+            { name: 'Requests', values: ov.series.map((p) => p.requests) },
+            { name: 'Stopped', values: ov.series.map((p) => p.blocked), colour: '#4a8ad6' },
+          ] })
+        }} />
+      </section>
+      <section className="panel span-5 flush">
+        <header><h2>Latest threats</h2><Link className="card-link" to={`/threats?site=${site.id}`}>All</Link></header>
+        <div className="rows" style={{ padding: '4px var(--card-pad) 8px' }}>
+          {recent.length ? recent.map((a) => (
+            <div key={a.tx_id} className="row">
+              <div className="grow"><div className="truncate">{categoryLabel(a.categories[0] ?? '')} from <span className="num">{a.client_ip}</span></div><div className="muted truncate">{a.method} {a.uri}</div></div>
+              <div style={{ textAlign: 'right' }}><div className={a.blocked ? '' : 'warn-text'}>{a.blocked ? 'Stopped' : 'Watched'}</div><div className="muted num">{when(a.ts)}</div></div>
+            </div>
+          )) : <Empty>No threats on this site.</Empty>}
+        </div>
+      </section>
     </div>
   )
 }

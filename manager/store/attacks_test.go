@@ -62,3 +62,30 @@ func TestAttacksQualifyAndJoin(t *testing.T) {
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []Count{{Key: "sqli", N: 1}, {Key: "protocol", N: 1}, {Key: "xss", N: 1}}, counts)
 }
+
+func TestRuleHitsAndLatency(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "r.db"))
+	require.NoError(t, err)
+	defer s.Close()
+	base := time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC)
+	ev := func(rule, cat string) Event {
+		return Event{TS: base, SiteID: "s_a", Type: "waf_match", ClientIP: "1.1.1.1", RuleID: rule, Msg: "m" + rule, Category: cat}
+	}
+	require.NoError(t, s.InsertEvents(ctx, []Event{ev("942100", "sqli"), ev("942100", "sqli"), ev("941100", "xss"), ev("949110", "score")}))
+	hits, err := s.RuleHits(ctx, "", time.Time{}, 8)
+	require.NoError(t, err)
+	assert.Equal(t, []RuleHit{{"942100", "m942100", "sqli", 2}, {"941100", "m941100", "xss", 1}}, hits)
+
+	p, err := s.LatencyP95(ctx, RequestFilter{})
+	require.NoError(t, err)
+	assert.Zero(t, p)
+	var reqs []Request
+	for i := 1; i <= 100; i++ {
+		reqs = append(reqs, Request{TS: base, SiteID: "s_a", DurMS: float64(i)})
+	}
+	require.NoError(t, s.InsertRequests(ctx, reqs))
+	p, err = s.LatencyP95(ctx, RequestFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 95.0, p)
+}

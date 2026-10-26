@@ -19,29 +19,38 @@ type pointView struct {
 }
 
 type overviewView struct {
-	Since      time.Time   `json:"since"`
-	StepSec    int         `json:"step_sec"`
-	Requests   int         `json:"requests"`
-	PV         int         `json:"pv"`
-	UV         int         `json:"uv"`
-	UniqueIPs  int         `json:"unique_ips"`
-	Blocked    int         `json:"blocked"`
-	BlockedIPs int         `json:"blocked_ips"`
-	Err4xx     int         `json:"err_4xx"`
-	Err5xx     int         `json:"err_5xx"`
-	Blocked4xx int         `json:"blocked_4xx"`
-	Series     []pointView `json:"series"`
-	QPS        []pointView `json:"qps"` // last 10 minutes, 10 s buckets, as requests per second ×10
-	Countries  []countView `json:"countries"`
-	Status     []countView `json:"status"`
-	OS         []countView `json:"os"`
-	Browsers   []countView `json:"browsers"`
-	Referrers  []countView `json:"referrers"`
-	Sites      []countView `json:"sites"`
-	Pages      []countView `json:"pages"`
-	IPs        []countView `json:"ips"`
-	Attacks    []countView `json:"attack_types"`
-	Actions    []countView `json:"actions"` // requests per WAF action (deny, rate_limit, auth, wait, challenge, block, allow; "" = passed)
+	Since      time.Time     `json:"since"`
+	StepSec    int           `json:"step_sec"`
+	Requests   int           `json:"requests"`
+	PV         int           `json:"pv"`
+	UV         int           `json:"uv"`
+	UniqueIPs  int           `json:"unique_ips"`
+	Blocked    int           `json:"blocked"`
+	BlockedIPs int           `json:"blocked_ips"`
+	Err4xx     int           `json:"err_4xx"`
+	Err5xx     int           `json:"err_5xx"`
+	Blocked4xx int           `json:"blocked_4xx"`
+	Series     []pointView   `json:"series"`
+	QPS        []pointView   `json:"qps"` // last 10 minutes, 10 s buckets, as requests per second ×10
+	Countries  []countView   `json:"countries"`
+	Status     []countView   `json:"status"`
+	OS         []countView   `json:"os"`
+	Browsers   []countView   `json:"browsers"`
+	Referrers  []countView   `json:"referrers"`
+	Sites      []countView   `json:"sites"`
+	Pages      []countView   `json:"pages"`
+	IPs        []countView   `json:"ips"`
+	Attacks    []countView   `json:"attack_types"`
+	Actions    []countView   `json:"actions"` // requests per WAF action (deny, rate_limit, auth, wait, challenge, block, allow; "" = passed)
+	Rules      []ruleHitView `json:"rules"`   // WAF rules that matched most
+	P95MS      float64       `json:"p95_ms"`  // 95th percentile request duration
+}
+
+type ruleHitView struct {
+	ID       string `json:"id"`
+	Msg      string `json:"msg"`
+	Category string `json:"category"`
+	Count    int    `json:"count"`
 }
 
 // fill returns points for every step from since to until, zero where the
@@ -145,6 +154,19 @@ func (a *API) overview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v.Attacks = counts(ac)
+	hits, err := a.st.RuleHits(ctx, f.SiteID, since, 8)
+	if err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	v.Rules = make([]ruleHitView, 0, len(hits))
+	for _, h := range hits {
+		v.Rules = append(v.Rules, ruleHitView{ID: h.RuleID, Msg: h.Msg, Category: h.Category, Count: h.N})
+	}
+	if v.P95MS, err = a.st.LatencyP95(ctx, f); err != nil {
+		a.writeErr(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, v)
 }
 
@@ -494,10 +516,11 @@ type systemView struct {
 	HTTPPort    int       `json:"http_port"`
 	HTTPSPort   int       `json:"https_port"`
 	Sites       int       `json:"sites"`
+	Ruleset     string    `json:"ruleset"`
 }
 
 func (a *API) system(w http.ResponseWriter, r *http.Request) {
-	v := systemView{Version: Version, Started: a.started.UTC(), GeoIP: a.opt.GeoIPDB != "",
+	v := systemView{Version: Version, Ruleset: Ruleset, Started: a.started.UTC(), GeoIP: a.opt.GeoIPDB != "",
 		AccessLog: a.opt.AccessLog != "", StaticSites: a.opt.StaticDir != "",
 		HTTPPort: a.opt.HTTPPort, HTTPSPort: a.opt.HTTPSPort}
 	if _, err := a.cl.WaitRooms(r.Context()); err != nil {

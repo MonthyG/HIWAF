@@ -1,7 +1,7 @@
 // Answers the console's API calls from the demo dataset, in memory. Only the demo build uses it.
 
 import * as D from './data'
-import type { Overview, SiteView } from '../types'
+import type { Attack, Overview, SiteView } from '../types'
 
 type Res = { status: number; body?: any }
 const ok = (body?: any): Res => ({ status: body === undefined ? 204 : 200, body })
@@ -64,7 +64,21 @@ function overview(q: URLSearchParams): Overview {
     sites: bySite.sort((a, b) => b.count - a.count),
     attack_types: count(atk.filter((a) => a.blocked || a.severity <= 2), (a) => a.categories[0]),
     actions,
+    rules: ruleHits(atk), p95_ms: requests ? 38.4 : 0,
   }
+}
+
+function ruleHits(atk: Attack[]) {
+  const m = new Map<string, { id: string; msg: string; category: string; count: number }>()
+  for (const a of atk) {
+    for (const e of D.matchesByTx[a.tx_id] ?? []) {
+      if (!e.rule_id || e.category === 'score') continue
+      const v = m.get(e.rule_id) ?? { id: e.rule_id, msg: e.detail, category: e.category ?? '', count: 0 }
+      v.count++
+      m.set(e.rule_id, v)
+    }
+  }
+  return [...m.values()].sort((a, b) => b.count - a.count || a.id.localeCompare(b.id)).slice(0, 8)
 }
 
 function siteCounts() {
@@ -138,7 +152,7 @@ export function demoRequest(method: string, fullPath: string, body: any): Res {
     ['session_fixation', 'Session fixation'], ['scanner', 'Scanner / bad-bot detection'], ['protocol', 'Protocol attacks + enforcement'],
     ['data_leak', 'Response data leakage (needs response body inspection)'],
   ].map(([key, label]) => ({ key, label, default: key !== 'data_leak' })))
-  if (path === '/system') return ok({ version: '2.0.0', started: new Date(D.NOW.getTime() - 26 * HOUR).toISOString(), engine_ok: true, geoip: true, access_log: true, static_sites: true, http_port: 80, https_port: 443, sites: D.sites.length })
+  if (path === '/system') return ok({ version: '2.0.0', started: new Date(D.NOW.getTime() - 26 * HOUR).toISOString(), engine_ok: true, geoip: true, access_log: true, static_sites: true, http_port: 80, https_port: 443, sites: D.sites.length, ruleset: 'CRS 4.25.0' })
   if (path === '/site-counts') return ok(siteCounts())
   if (path === '/stats/overview') return ok(overview(q))
   if (path === '/waitroom') return ok({ [D.S.harbour]: { active: 132, waiting: 0 } })

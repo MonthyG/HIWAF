@@ -3,17 +3,23 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { api, DEMO } from './api'
 import { useApp } from './context'
 import type { SiteCounts } from './types'
-import { Icon, IconBtn, Mark } from './ui'
+import { Btn, Icon, IconBtn, Mark } from './ui'
 import { int, siteName } from './util'
 
-const pages = [
-  { to: '/overview', icon: 'overview', label: 'Overview' },
-  { to: '/sites', icon: 'sites', label: 'Sites' },
-  { to: '/threats', icon: 'threats', label: 'Threats' },
-  { to: '/access', icon: 'access', label: 'Access' },
-  { to: '/activity', icon: 'activity', label: 'Activity' },
-  { to: '/settings', icon: 'settings', label: 'Settings' },
+const groups = [
+  { name: 'Watch', pages: [
+    { to: '/overview', icon: 'overview', label: 'Overview' },
+    { to: '/threats', icon: 'threats', label: 'Threats', count: true },
+    { to: '/activity', icon: 'activity', label: 'Activity' },
+  ] },
+  { name: 'Policy', pages: [
+    { to: '/sites', icon: 'sites', label: 'Sites' },
+    { to: '/access', icon: 'access', label: 'Access' },
+  ] },
+  { name: 'System', pages: [{ to: '/settings', icon: 'settings', label: 'Settings' }] },
 ]
+const pageLabel: Record<string, string> = Object.fromEntries(groups.flatMap((g) => g.pages.map((p) => [p.to.slice(1), p.label])))
+const areaLabel: Record<string, string> = { certificates: 'Certificates', account: 'Your account', tokens: 'API tokens', system: 'System' }
 
 const modeDot: Record<string, string> = { block: 'var(--positive)', detect: 'var(--warning)', off: '#5b5b60' }
 const modeWord: Record<string, string> = { block: 'Blocking', detect: 'Watching', off: 'Off' }
@@ -21,7 +27,7 @@ const PHONE = '(max-width: 860px)'
 
 /** The menu's content: the pages, then every site. Shared by the sidebar and the phone drawer. */
 function Menu({ onNavigate, counts }: { onNavigate?: () => void; counts: SiteCounts }) {
-  const { sites, me, setMe } = useApp()
+  const { sites, me, setMe, system } = useApp()
   const navigate = useNavigate()
   const logout = async () => {
     try {
@@ -33,14 +39,21 @@ function Menu({ onNavigate, counts }: { onNavigate?: () => void; counts: SiteCou
     navigate('/login')
   }
   const ordered = [...sites].sort((a, b) => (counts[b.id]?.blocked ?? 0) - (counts[a.id]?.blocked ?? 0) || siteName(a).localeCompare(siteName(b)))
+  const stopped = Object.values(counts).reduce((n, c) => n + (c.blocked ?? 0), 0)
   return (
     <>
       <nav aria-label="Pages">
-        {pages.map((p) => (
-          <NavLink key={p.to} to={p.to} className="drawer-link" onClick={onNavigate}>
-            <Icon name={p.icon} />
-            <span>{p.label}</span>
-          </NavLink>
+        {groups.map((g) => (
+          <div key={g.name}>
+            <div className="nav-group">{g.name}</div>
+            {g.pages.map((p) => (
+              <NavLink key={p.to} to={p.to} className="drawer-link" onClick={onNavigate}>
+                <Icon name={p.icon} />
+                <span>{p.label}</span>
+                {'count' in p && stopped > 0 && <span className="n" title="Stopped today">{int(stopped)}</span>}
+              </NavLink>
+            ))}
+          </div>
         ))}
       </nav>
       <div className="drawer-section"><span>Sites</span><span className="num">{sites.length}</span></div>
@@ -56,6 +69,12 @@ function Menu({ onNavigate, counts }: { onNavigate?: () => void; counts: SiteCou
         ))}
       </ul>
       <NavLink to="/sites/new" className="drawer-add" onClick={onNavigate}><Icon name="plus" /> Add a site</NavLink>
+      <div className="node-status" aria-label="Edge status">
+        <div><span>Edge</span><b>{DEMO ? 'edge-tpe-01' : window.location.hostname}</b></div>
+        <div><span>Engine</span><b className={system && !system.engine_ok ? 'bad' : ''}>{system ? (system.engine_ok ? 'running' : 'unreachable') : 'checking'}</b></div>
+        <div><span>Rule set</span><b>{system?.ruleset ?? '-'}</b></div>
+        <div><span>Console</span><b>v{system?.version ?? '-'}</b></div>
+      </div>
       <div className="drawer-foot">
         <span className="muted truncate">Signed in as {me?.username}</span>
         <button type="button" className="card-link" onClick={logout}>Sign out</button>
@@ -110,6 +129,12 @@ export default function Shell() {
     try { localStorage.setItem('hiwaf.sidebar', next ? 'hidden' : 'shown') } catch { /* per-browser preference only */ }
   }
   const edge = DEMO ? 'edge-tpe-01' : window.location.hostname
+  const navigate = useNavigate()
+  const { siteById } = useApp()
+  const seg = loc.pathname.split('/').filter(Boolean)
+  const crumbs = [{ to: `/${seg[0] ?? 'overview'}`, label: pageLabel[seg[0] ?? 'overview'] ?? 'Overview' }]
+  if (seg[0] === 'sites' && seg[1]) crumbs.push({ to: loc.pathname, label: seg[1] === 'new' ? 'Add a site' : siteName(siteById[seg[1]], seg[1]) })
+  if (seg[0] === 'settings' && seg[1]) crumbs.push({ to: loc.pathname, label: areaLabel[seg[1]] ?? seg[1] })
 
   return (
     <div className={'app' + (hidden ? ' sidebar-hidden' : '')}>
@@ -123,10 +148,20 @@ export default function Shell() {
             <span /><span /><span />
           </button>
           <NavLink to="/overview" className="brand topbar-brand" aria-label="HostingInside WAF, overview"><Mark size={24} /><span className="product">HostingInside WAF</span></NavLink>
-          <span className="edge">{edge}</span>
+          <nav className="crumbs" aria-label="You are here">
+            <span className="hide-s">{edge}</span><span className="sep hide-s">/</span>
+            {crumbs.map((c, i) => (
+              <span key={i} style={{ display: 'contents' }}>
+                {i > 0 && <span className="sep">/</span>}
+                {i === crumbs.length - 1 ? <b aria-current="page">{c.label}</b> : <NavLink to={c.to}>{c.label}</NavLink>}
+              </span>
+            ))}
+          </nav>
+          <span className="env hide-s">{system?.ruleset ?? 'edge'}</span>
           <span className="spacer" />
-          <span className={'dot' + (system && !system.engine_ok ? ' off' : '')} aria-hidden="true" />
-          <span className="engine">{system ? (system.engine_ok ? 'Engine running' : 'Engine unreachable') : 'Checking engine'}</span>
+          <span className={'dot hide-s' + (system && !system.engine_ok ? ' off' : '')} aria-hidden="true" />
+          <span className="engine hide-s">{system ? (system.engine_ok ? 'Engine running' : 'Engine unreachable') : 'Checking engine'}</span>
+          {!loc.pathname.startsWith('/sites/new') && <Btn kind="primary" small icon="plus" onClick={() => navigate('/sites/new')}>Add a site</Btn>}
         </header>
         <main className="canvas">
           <Outlet />
