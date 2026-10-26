@@ -1,348 +1,230 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import {
-  Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Paper, Stack, Tab, Table,
-  TableBody, TableCell, TableHead, TableRow, Tabs, TextField, Typography,
-} from '@mui/material'
-import AddIcon from '@mui/icons-material/Add'
-import DeleteIcon from '@mui/icons-material/DeleteOutline'
-import EditIcon from '@mui/icons-material/EditOutlined'
+import { useNavigate, useParams } from 'react-router-dom'
 import QRCode from 'qrcode'
 import { api, errText } from '../api'
 import { useApp } from '../context'
-import type { Certificate, IPGroup, Me, Token } from '../types'
-import { Confirm, Empty, PageTitle, Section, siteName } from '../components/common'
-import { fmtTime } from '../util'
+import type { Certificate, Me, Token } from '../types'
+import { Btn, Confirm, Dialog, Empty, Field, IconBtn, Pill, Tabs } from '../ui'
+import { daysLeft, dateTime, siteName, when } from '../util'
 
-function Row({ k, v }: { k: string; v: React.ReactNode }) {
+const areas = [
+  { value: 'certificates', label: 'Certificates' }, { value: 'account', label: 'Your account' },
+  { value: 'tokens', label: 'API tokens' }, { value: 'system', label: 'System' },
+] as const
+type Area = (typeof areas)[number]['value']
+
+export default function Settings() {
+  const { area = 'certificates' } = useParams()
+  const navigate = useNavigate()
+  const a = (areas.find((x) => x.value === area)?.value ?? 'certificates') as Area
   return (
-    <Stack direction="row" sx={{ py: 1, borderBottom: '1px solid #f0f3f5', fontSize: 13.5 }}>
-      <Box sx={{ width: 200, color: 'text.secondary' }}>{k}</Box>
-      <Box sx={{ flex: 1 }}>{v}</Box>
-    </Stack>
+    <>
+      <div className="title-row">
+        <div>
+          <h1>{areas.find((x) => x.value === a)!.label}</h1>
+          <p className="sub">{{
+            certificates: 'Certificates you uploaded, soonest to expire first. Sites on automatic certificates need nothing here.',
+            account: 'Your password and two-step sign-in for this console.',
+            tokens: 'Keys that let scripts and the cloud control plane call the API.',
+            system: 'The engine behind this console and what it is set up with.',
+          }[a]}</p>
+        </div>
+      </div>
+      <Tabs value={a} onChange={(v) => navigate(`/settings/${v}`)} tabs={areas.map((x) => ({ value: x.value, label: x.label }))} />
+      {a === 'certificates' && <Certs />}
+      {a === 'account' && <Account />}
+      {a === 'tokens' && <Tokens />}
+      {a === 'system' && <System />}
+    </>
   )
 }
 
-function SystemTab() {
-  const { system } = useApp()
-  if (!system) return null
-  const ok = (b: boolean, yes = 'Enabled', no = 'Not configured') => (
-    <Chip size="small" label={b ? yes : no} sx={{ borderRadius: 1, bgcolor: b ? 'rgba(15,165,160,.1)' : '#f1f4f6', color: b ? 'primary.main' : 'text.secondary' }} />
-  )
-  return (
-    <Section title="System">
-      <Row k="Version" v={system.version} />
-      <Row k="Engine" v={system.engine_ok ? ok(true, 'Online') : <Typography color="error" sx={{ fontSize: 13 }}>Offline: {system.engine_error}</Typography>} />
-      <Row k="Manager started" v={fmtTime(system.started)} />
-      <Row k="Applications" v={system.sites} />
-      <Row k="Default HTTP / HTTPS ports" v={`${system.http_port} / ${system.https_port}`} />
-      <Row k="GeoIP database" v={<>{ok(system.geoip)}{system.geoip && (
-        <Typography component="span" sx={{ fontSize: 12, color: 'text.secondary', ml: 1 }}>
-          IP geolocation by <a href="https://db-ip.com" target="_blank" rel="noreferrer">DB-IP</a> (CC BY 4.0)
-        </Typography>)}</>} />
-      <Row k="Traffic statistics (access log)" v={ok(system.access_log)} />
-      <Row k="Static file applications" v={ok(system.static_sites)} />
-    </Section>
-  )
-}
-
-function CertTab() {
+function Certs() {
   const { siteById, notify, notifyError } = useApp()
   const [certs, setCerts] = useState<Certificate[]>([])
-  const [dlg, setDlg] = useState<{ cert?: Certificate } | null>(null)
-  const [del, setDel] = useState<Certificate | null>(null)
-  const load = useCallback(() => api.get<Certificate[]>('/certificates').then(setCerts).catch(notifyError), [notifyError])
-  useEffect(() => { load() }, [load])
-  return (
-    <Paper sx={{ borderRadius: 2, overflow: 'hidden' }}>
-      <Stack direction="row" alignItems="center" sx={{ p: 2 }}>
-        <Typography sx={{ flex: 1, fontSize: 13, color: 'text.secondary' }}>
-          Uploaded certificates can be chosen in an application's SSL Cert setting. Applications with “automatic certificate” don't need one.
-        </Typography>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setDlg({})}>Upload certificate</Button>
-      </Stack>
-      <Table size="small">
-        <TableHead><TableRow><TableCell>Name</TableCell><TableCell>Domains</TableCell><TableCell>Issuer</TableCell><TableCell>Expires</TableCell><TableCell>Used by</TableCell><TableCell /></TableRow></TableHead>
-        <TableBody>
-          {certs.map((c) => {
-            const days = Math.round((new Date(c.not_after).getTime() - Date.now()) / 86400000)
-            return (
-              <TableRow key={c.id} hover>
-                <TableCell sx={{ fontWeight: 600 }}>{c.name}</TableCell>
-                <TableCell sx={{ fontSize: 12.5 }}>{(c.dns_names ?? []).join(', ') || c.subject}</TableCell>
-                <TableCell sx={{ fontSize: 12.5 }}>{c.issuer}</TableCell>
-                <TableCell sx={{ color: days < 15 ? 'error.main' : 'text.primary', whiteSpace: 'nowrap' }}>{fmtTime(c.not_after)} ({days} d)</TableCell>
-                <TableCell sx={{ fontSize: 12.5 }}>{c.used_by.map((s) => (siteById[s] ? siteName(siteById[s]) : s)).join(', ') || '-'}</TableCell>
-                <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
-                  <IconButton size="small" onClick={() => setDlg({ cert: c })}><EditIcon fontSize="small" /></IconButton>
-                  <IconButton size="small" onClick={() => setDel(c)}><DeleteIcon fontSize="small" /></IconButton>
-                </TableCell>
-              </TableRow>
-            )
-          })}
-        </TableBody>
-      </Table>
-      {!certs.length && <Empty text="No certificates uploaded." />}
-      <CertDialog open={!!dlg} cert={dlg?.cert} onClose={() => setDlg(null)} onSaved={() => { setDlg(null); notify('Certificate saved'); load() }} />
-      <Confirm open={!!del} danger title="Delete certificate" text={<>Delete <b>{del?.name}</b>?</>} confirmLabel="Delete" onClose={() => setDel(null)}
-        onConfirm={async () => { const c = del!; setDel(null); try { await api.del(`/certificates/${c.id}`); notify('Certificate deleted'); load() } catch (e) { notifyError(e) } }} />
-    </Paper>
-  )
-}
-
-function CertDialog({ open, cert, onClose, onSaved }: { open: boolean; cert?: Certificate; onClose: () => void; onSaved: () => void }) {
+  const [dlg, setDlg] = useState<Certificate | 'new' | null>(null)
   const [name, setName] = useState('')
   const [crt, setCrt] = useState('')
   const [key, setKey] = useState('')
   const [err, setErr] = useState('')
-  useEffect(() => { if (open) { setName(cert?.name ?? ''); setCrt(''); setKey(''); setErr('') } }, [open, cert])
-  const readFile = (f: File, set: (s: string) => void) => f.text().then(set)
-  const save = async () => {
-    try {
-      const body = { name, cert_pem: crt, key_pem: key }
-      if (cert) await api.put(`/certificates/${cert.id}`, body)
-      else await api.post('/certificates', body)
-      onSaved()
-    } catch (e) {
-      setErr(errText(e))
-    }
-  }
-  return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>{cert ? 'Replace certificate' : 'Upload certificate'}</DialogTitle>
-      <DialogContent>
-        <Stack spacing={2} sx={{ mt: 1 }}>
-          {err && <Alert severity="error">{err}</Alert>}
-          <TextField label="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
-          {[['Certificate (PEM, with chain)', crt, setCrt], ['Private key (PEM)', key, setKey]].map(([label, val, set]) => (
-            <Box key={label as string}>
-              <TextField label={label as string} value={val as string} onChange={(e) => (set as (s: string) => void)(e.target.value)} multiline minRows={4} fullWidth
-                placeholder="-----BEGIN ..." inputProps={{ style: { fontFamily: 'ui-monospace,Consolas,monospace', fontSize: 12 } }} />
-              <Button component="label" size="small" sx={{ mt: 0.5 }}>
-                Load from file<input hidden type="file" accept=".pem,.crt,.key,.cer" onChange={(e) => e.target.files?.[0] && readFile(e.target.files[0], set as (s: string) => void)} />
-              </Button>
-            </Box>
-          ))}
-        </Stack>
-      </DialogContent>
-      <DialogActions><Button onClick={onClose}>Cancel</Button><Button variant="contained" onClick={save} disabled={!crt || !key}>Save</Button></DialogActions>
-    </Dialog>
-  )
-}
-
-function GroupTab() {
-  const { notify, notifyError } = useApp()
-  const [groups, setGroups] = useState<IPGroup[]>([])
-  const [dlg, setDlg] = useState<{ g?: IPGroup } | null>(null)
-  const [del, setDel] = useState<IPGroup | null>(null)
-  const [name, setName] = useState('')
-  const [desc, setDesc] = useState('')
-  const [ips, setIps] = useState('')
-  const [err, setErr] = useState('')
-  const load = useCallback(() => api.get<IPGroup[]>('/ip-groups').then(setGroups).catch(notifyError), [notifyError])
+  const [del, setDel] = useState<Certificate | null>(null)
+  const load = useCallback(() => api.get<Certificate[]>('/certificates').then((c) => setCerts([...c].sort((x, y) => x.not_after.localeCompare(y.not_after)))).catch(notifyError), [notifyError])
   useEffect(() => { load() }, [load])
-  const open = (g?: IPGroup) => { setDlg({ g }); setName(g?.name ?? ''); setDesc(g?.description ?? ''); setIps((g?.ips ?? []).join('\n')); setErr('') }
+  const open = (c: Certificate | 'new') => { setDlg(c); setName(c === 'new' ? '' : c.name); setCrt(''); setKey(''); setErr('') }
   const save = async () => {
-    const body = { name, description: desc, ips: ips.split(/[\s,;]+/).filter(Boolean) }
     try {
-      if (dlg?.g) await api.put(`/ip-groups/${dlg.g.id}`, body)
-      else await api.post('/ip-groups', body)
-      setDlg(null); notify('IP group saved'); load()
+      if (dlg && dlg !== 'new') await api.put(`/certificates/${dlg.id}`, { name, cert_pem: crt, key_pem: key })
+      else await api.post('/certificates', { name, cert_pem: crt, key_pem: key })
+      setDlg(null); notify('Certificate saved'); load()
     } catch (e) { setErr(errText(e)) }
   }
   return (
-    <Paper sx={{ borderRadius: 2, overflow: 'hidden' }}>
-      <Stack direction="row" alignItems="center" sx={{ p: 2 }}>
-        <Typography sx={{ flex: 1, fontSize: 13, color: 'text.secondary' }}>Reusable IP lists for custom rules and application allow/deny lists.</Typography>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => open()}>Add IP group</Button>
-      </Stack>
-      <Table size="small">
-        <TableHead><TableRow><TableCell>Name</TableCell><TableCell>Description</TableCell><TableCell>Entries</TableCell><TableCell>Updated</TableCell><TableCell /></TableRow></TableHead>
-        <TableBody>
-          {groups.map((g) => (
-            <TableRow key={g.id} hover>
-              <TableCell sx={{ fontWeight: 600 }}>{g.name}</TableCell>
-              <TableCell sx={{ fontSize: 12.5, color: 'text.secondary' }}>{g.description || '-'}</TableCell>
-              <TableCell>{g.ips.length}</TableCell>
-              <TableCell sx={{ fontSize: 12.5 }}>{fmtTime(g.updated)}</TableCell>
-              <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
-                <IconButton size="small" onClick={() => open(g)}><EditIcon fontSize="small" /></IconButton>
-                <IconButton size="small" onClick={() => setDel(g)}><DeleteIcon fontSize="small" /></IconButton>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-      {!groups.length && <Empty text="No IP groups." />}
-      <Dialog open={!!dlg} onClose={() => setDlg(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>{dlg?.g ? 'Edit IP group' : 'Add IP group'}</DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            {err && <Alert severity="error">{err}</Alert>}
-            <TextField label="Name" value={name} onChange={(e) => setName(e.target.value)} />
-            <TextField label="Description" value={desc} onChange={(e) => setDesc(e.target.value)} />
-            <TextField label="IPs and CIDRs (one per line)" value={ips} onChange={(e) => setIps(e.target.value)} multiline minRows={6}
-              inputProps={{ style: { fontFamily: 'ui-monospace,Consolas,monospace', fontSize: 12.5 } }} />
-          </Stack>
-        </DialogContent>
-        <DialogActions><Button onClick={() => setDlg(null)}>Cancel</Button><Button variant="contained" onClick={save}>Save</Button></DialogActions>
+    <>
+      <div className="toolbar"><span className="spacer" /><Btn kind="primary" icon="upload" onClick={() => open('new')}>Upload a certificate</Btn></div>
+      <section className="panel flush">
+        <table className="responsive">
+          <thead><tr><th>Certificate</th><th>Covers</th><th className="hide-phone">Used by</th><th className="n">Expires</th><th /></tr></thead>
+          <tbody>
+            {certs.map((c) => {
+              const d = daysLeft(c.not_after)
+              return (
+                <tr key={c.id}>
+                  <td><span className="ident">{c.name}</span><span className="sub truncate">{c.issuer}</span></td>
+                  <td className="secondary">{(c.dns_names ?? []).join(', ') || c.subject}</td>
+                  <td className="secondary hide-phone">{c.used_by.map((s) => siteName(siteById[s], s)).join(', ') || <span className="muted">No site</span>}</td>
+                  <td className="n">{d < 0 ? <Pill tone="neg">Expired</Pill> : d <= 21 ? <Pill tone="warn">In {d} days</Pill> : <span className="num">{dateTime(c.not_after).slice(0, 10)}</span>}</td>
+                  <td className="n" style={{ whiteSpace: 'nowrap' }}>
+                    <Btn small onClick={() => open(c)}>Replace</Btn>
+                    <IconBtn icon="trash" label={`Delete ${c.name}`} onClick={() => setDel(c)} />
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+        {!certs.length && <div style={{ padding: 'var(--card-pad)' }}><Empty>No uploaded certificates. Sites use automatic ones unless you upload your own.</Empty></div>}
+      </section>
+      <Dialog open={!!dlg} wide title={dlg === 'new' ? 'Upload a certificate' : `Replace ${dlg ? dlg.name : ''}`} onClose={() => setDlg(null)}
+        footer={<><Btn onClick={() => setDlg(null)}>Cancel</Btn><Btn kind="primary" disabled={!crt || !key} onClick={save}>Save certificate</Btn></>}>
+        {err && <p className="notice" role="alert">{err}</p>}
+        <Field label="Name" id="cn" hint="Defaults to the certificate’s first name."><input id="cn" className="input" value={name} onChange={(e) => setName(e.target.value)} /></Field>
+        <Field label="Certificate with its chain (PEM)" id="cc"><textarea id="cc" className="input code" rows={6} value={crt} onChange={(e) => setCrt(e.target.value)} placeholder="-----BEGIN CERTIFICATE-----" /></Field>
+        <Field label="Private key (PEM)" id="ck" hint="Kept on the server; never shown again."><textarea id="ck" className="input code" rows={5} value={key} onChange={(e) => setKey(e.target.value)} placeholder="-----BEGIN PRIVATE KEY-----" /></Field>
       </Dialog>
-      <Confirm open={!!del} danger title="Delete IP group" text={<>Delete <b>{del?.name}</b>?</>} confirmLabel="Delete" onClose={() => setDel(null)}
-        onConfirm={async () => { const g = del!; setDel(null); try { await api.del(`/ip-groups/${g.id}`); notify('IP group deleted'); load() } catch (e) { notifyError(e) } }} />
-    </Paper>
+      <Confirm open={!!del} danger title={`Delete ${del?.name}?`} confirm="Delete certificate" onClose={() => setDel(null)}
+        onConfirm={async () => { const c = del!; setDel(null); try { await api.del(`/certificates/${c.id}`); notify('Certificate deleted'); load() } catch (e) { notifyError(e) } }}>
+        A certificate still used by a site cannot be deleted; move the site to another certificate first.
+      </Confirm>
+    </>
   )
 }
 
-function AccountTab() {
+function Account() {
   const { me, setMe, notify, notifyError } = useApp()
   const [oldPw, setOldPw] = useState('')
   const [newPw, setNewPw] = useState('')
-  const [newPw2, setNewPw2] = useState('')
   const [pwErr, setPwErr] = useState('')
   const [setup, setSetup] = useState<{ secret: string; qr: string } | null>(null)
   const [code, setCode] = useState('')
-  const [disablePw, setDisablePw] = useState('')
-  const [tfaErr, setTfaErr] = useState('')
-
-  if (!me || me.kind !== 'user') return <Alert severity="info">Account settings are only available to console users.</Alert>
-  const changePw = async () => {
-    if (newPw !== newPw2) { setPwErr('The new passwords differ.'); return }
-    try {
-      await api.post('/auth/password', { old_password: oldPw, new_password: newPw })
-      setOldPw(''); setNewPw(''); setNewPw2(''); setPwErr('')
-      notify('Password changed. Other sessions were signed out.')
-    } catch (e) { setPwErr(errText(e)) }
-  }
-  const startTotp = async () => {
-    try {
-      const r = await api.post<{ secret: string; otpauth_url: string }>('/auth/totp/setup')
-      setSetup({ secret: r.secret, qr: await QRCode.toDataURL(r.otpauth_url, { margin: 1, width: 200 }) })
-      setTfaErr('')
-    } catch (e) { notifyError(e) }
-  }
-  const enable = async () => {
-    try {
-      await api.post('/auth/totp/enable', { code })
-      setSetup(null); setCode('')
-      setMe({ ...me, totp_enabled: true })
-      notify('Two-factor authentication is on')
-    } catch (e) { setTfaErr(errText(e)) }
-  }
-  const disable = async () => {
-    try {
-      await api.post('/auth/totp/disable', { password: disablePw })
-      setDisablePw('')
-      setMe({ ...me, totp_enabled: false } as Me)
-      notify('Two-factor authentication is off')
-    } catch (e) { setTfaErr(errText(e)) }
-  }
-
+  const [offPw, setOffPw] = useState('')
+  const [tErr, setTErr] = useState('')
+  if (!me || me.kind !== 'user') return <Empty>Signed in with an API token: there is no account to change.</Empty>
   return (
-    <Stack spacing={2}>
-      <Section title={`Password (${me.username})`}>
-        <Stack spacing={1.5} sx={{ maxWidth: 380 }}>
-          {pwErr && <Alert severity="error">{pwErr}</Alert>}
-          <TextField label="Current password" type="password" value={oldPw} onChange={(e) => setOldPw(e.target.value)} />
-          <TextField label="New password (8+ characters)" type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)} />
-          <TextField label="Repeat new password" type="password" value={newPw2} onChange={(e) => setNewPw2(e.target.value)} />
-          <Box><Button variant="contained" onClick={changePw} disabled={!oldPw || newPw.length < 8}>Change password</Button></Box>
-        </Stack>
-      </Section>
-      <Section title="Two-factor authentication (TOTP)">
-        {tfaErr && <Alert severity="error" sx={{ mb: 1.5 }}>{tfaErr}</Alert>}
-        {me.totp_enabled ? (
-          <Stack spacing={1.5} sx={{ maxWidth: 380 }}>
-            <Alert severity="success">On. Sign-in asks for a code from your authenticator app.</Alert>
-            <TextField label="Password to turn it off" type="password" value={disablePw} onChange={(e) => setDisablePw(e.target.value)} />
-            <Box><Button color="error" variant="outlined" onClick={disable} disabled={!disablePw}>Turn off</Button></Box>
-          </Stack>
-        ) : setup ? (
-          <Stack direction="row" spacing={3} alignItems="flex-start">
-            <img src={setup.qr} width={200} height={200} alt="TOTP QR code" />
-            <Stack spacing={1.5} sx={{ maxWidth: 360 }}>
-              <Typography sx={{ fontSize: 13 }}>Scan the code with Google Authenticator, Authy or 1Password, or enter this key:</Typography>
-              <Typography sx={{ fontFamily: 'ui-monospace,Consolas,monospace', fontSize: 13, wordBreak: 'break-all', bgcolor: '#f3f6f8', p: 1, borderRadius: 1 }}>{setup.secret}</Typography>
-              <TextField label="6-digit code" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} />
-              <Box><Button variant="contained" onClick={enable} disabled={code.length !== 6}>Turn on</Button></Box>
-            </Stack>
-          </Stack>
-        ) : (
-          <Button variant="outlined" onClick={startTotp}>Set up two-factor authentication</Button>
-        )}
-      </Section>
-    </Stack>
+    <section className="panel" style={{ paddingTop: 0, paddingBottom: 0 }}>
+      <div className="setting">
+        <div><h2>Password</h2><p className="desc">Changing it signs you out everywhere else.</p></div>
+        <form style={{ display: 'grid', gap: 16, maxWidth: 420 }} onSubmit={async (e) => {
+          e.preventDefault()
+          try { await api.post('/auth/password', { old_password: oldPw, new_password: newPw }); setOldPw(''); setNewPw(''); setPwErr(''); notify('Password changed') } catch (er) { setPwErr(errText(er)) }
+        }}>
+          <Field label="Current password" id="op"><input id="op" className="input" type="password" autoComplete="current-password" value={oldPw} onChange={(e) => setOldPw(e.target.value)} /></Field>
+          <Field label="New password" id="np" hint="8 to 72 characters." error={pwErr}><input id="np" className="input" type="password" autoComplete="new-password" value={newPw} onChange={(e) => setNewPw(e.target.value)} aria-describedby="np-hint" /></Field>
+          <div><button type="submit" className="btn primary" disabled={!oldPw || newPw.length < 8}>Change password</button></div>
+        </form>
+      </div>
+      <div className="setting">
+        <div><h2>Two-step sign-in</h2><p className="desc">After the password, ask for a 6-digit code from an authenticator app.</p></div>
+        <div style={{ display: 'grid', gap: 16, maxWidth: 520 }}>
+          {tErr && <p className="error-line" role="alert">{tErr}</p>}
+          {me.totp_enabled ? (
+            <>
+              <p><Pill tone="pos">On</Pill></p>
+              <Field label="Your password, to turn it off" id="tp"><input id="tp" className="input" type="password" value={offPw} onChange={(e) => setOffPw(e.target.value)} /></Field>
+              <div><Btn kind="danger" disabled={!offPw} onClick={async () => {
+                try { await api.post('/auth/totp/disable', { password: offPw }); setOffPw(''); setMe({ ...me, totp_enabled: false } as Me); notify('Two-step sign-in is off') } catch (e) { setTErr(errText(e)) }
+              }}>Turn off</Btn></div>
+            </>
+          ) : setup ? (
+            <div style={{ display: 'grid', gridTemplateColumns: '180px minmax(0,1fr)', gap: 20, alignItems: 'start' }}>
+              <img src={setup.qr} width={180} height={180} alt="Code to scan with an authenticator app" style={{ borderRadius: 4 }} />
+              <div style={{ display: 'grid', gap: 12 }}>
+                <p>Scan the code, or type this key into the app:</p>
+                <p className="code" style={{ wordBreak: 'break-all' }}>{setup.secret}</p>
+                <Field label="Code from the app" id="tc"><input id="tc" className="input num" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} /></Field>
+                <div><Btn kind="primary" disabled={code.length !== 6} onClick={async () => {
+                  try { await api.post('/auth/totp/enable', { code }); setSetup(null); setCode(''); setMe({ ...me, totp_enabled: true }); notify('Two-step sign-in is on') } catch (e) { setTErr(errText(e)) }
+                }}>Turn on</Btn></div>
+              </div>
+            </div>
+          ) : (
+            <div><Btn onClick={async () => {
+              try {
+                const r = await api.post<{ secret: string; otpauth_url: string }>('/auth/totp/setup')
+                setSetup({ secret: r.secret, qr: await QRCode.toDataURL(r.otpauth_url, { margin: 1, width: 180, color: { dark: '#000000', light: '#ffffff' } }) })
+              } catch (e) { notifyError(e) }
+            }}>Set up two-step sign-in</Btn></div>
+          )}
+        </div>
+      </div>
+    </section>
   )
 }
 
-function TokenTab() {
+function Tokens() {
   const { notify, notifyError } = useApp()
   const [tokens, setTokens] = useState<Token[]>([])
   const [name, setName] = useState('')
-  const [created, setCreated] = useState<Token | null>(null)
+  const [made, setMade] = useState<Token | null>(null)
   const [del, setDel] = useState<Token | null>(null)
   const load = useCallback(() => api.get<Token[]>('/tokens').then(setTokens).catch(notifyError), [notifyError])
   useEffect(() => { load() }, [load])
   return (
-    <Stack spacing={2}>
-      <Section title="API tokens">
-        <Typography sx={{ fontSize: 13, color: 'text.secondary', mb: 1.5 }}>
-          Tokens authenticate scripts and other systems (for example the cloud control plane) against <code>/api/v1</code> with
-          <code> Authorization: Bearer &lt;token&gt;</code>. A token has full access.
-        </Typography>
-        <Stack direction="row" spacing={1.5}>
-          <TextField label="Token name" value={name} onChange={(e) => setName(e.target.value)} sx={{ width: 280 }} />
-          <Button variant="contained" disabled={!name.trim()} onClick={async () => {
-            try { setCreated(await api.post<Token>('/tokens', { name })); setName(''); load() } catch (e) { notifyError(e) }
-          }}>Create token</Button>
-        </Stack>
-        {created && (
-          <Alert severity="success" sx={{ mt: 2 }} onClose={() => setCreated(null)}>
-            Copy this token now; it won't be shown again:
-            <Typography sx={{ fontFamily: 'ui-monospace,Consolas,monospace', fontSize: 13, mt: 0.5, wordBreak: 'break-all' }}>{created.token}</Typography>
-          </Alert>
-        )}
-      </Section>
-      <Paper sx={{ borderRadius: 2, overflow: 'hidden' }}>
-        <Table size="small">
-          <TableHead><TableRow><TableCell>Name</TableCell><TableCell>Created</TableCell><TableCell>Last used</TableCell><TableCell /></TableRow></TableHead>
-          <TableBody>
+    <>
+      <form className="toolbar" onSubmit={async (e) => {
+        e.preventDefault()
+        try { setMade(await api.post<Token>('/tokens', { name })); setName(''); load() } catch (er) { notifyError(er) }
+      }}>
+        <input aria-label="Token name" className="input compact" style={{ width: 280 }} placeholder="What will use it, e.g. billing-sync" value={name} onChange={(e) => setName(e.target.value)} />
+        <button type="submit" className="btn primary" disabled={!name.trim()}>Create token</button>
+        <span className="spacer" />
+        <span className="muted">Send it as <span className="code">Authorization: Bearer …</span>. A token can do anything you can.</span>
+      </form>
+      {made && (
+        <p className="notice" style={{ marginBottom: 16 }}>
+          Copy it now; it is not shown again: <span className="code" style={{ wordBreak: 'break-all' }}>{made.token}</span>
+          <IconBtn icon="copy" label="Copy token" onClick={() => { navigator.clipboard?.writeText(made.token ?? ''); notify('Copied') }} />
+        </p>
+      )}
+      <section className="panel flush">
+        <table className="responsive">
+          <thead><tr><th>Token</th><th className="n">Created</th><th className="n">Last used</th><th /></tr></thead>
+          <tbody>
             {tokens.map((t) => (
-              <TableRow key={t.id}>
-                <TableCell sx={{ fontWeight: 600 }}>{t.name}</TableCell>
-                <TableCell>{fmtTime(t.created)}</TableCell>
-                <TableCell>{t.last_used ? fmtTime(t.last_used) : 'Never'}</TableCell>
-                <TableCell align="right"><IconButton size="small" onClick={() => setDel(t)}><DeleteIcon fontSize="small" /></IconButton></TableCell>
-              </TableRow>
+              <tr key={t.id}>
+                <td className="ident">{t.name}</td>
+                <td className="n num">{dateTime(t.created).slice(0, 10)}</td>
+                <td className="n num">{t.last_used ? when(t.last_used) : <span className="muted">Never</span>}</td>
+                <td className="n"><Btn small kind="danger" onClick={() => setDel(t)}>Revoke</Btn></td>
+              </tr>
             ))}
-          </TableBody>
-        </Table>
-        {!tokens.length && <Empty text="No API tokens." />}
-      </Paper>
-      <Confirm open={!!del} danger title="Revoke token" text={<>Revoke <b>{del?.name}</b>? Anything using it stops working.</>} confirmLabel="Revoke"
-        onClose={() => setDel(null)}
-        onConfirm={async () => { const t = del!; setDel(null); try { await api.del(`/tokens/${t.id}`); notify('Token revoked'); load() } catch (e) { notifyError(e) } }} />
-    </Stack>
+          </tbody>
+        </table>
+        {!tokens.length && <div style={{ padding: 'var(--card-pad)' }}><Empty>No API tokens.</Empty></div>}
+      </section>
+      <Confirm open={!!del} danger title={`Revoke ${del?.name}?`} confirm="Revoke token" onClose={() => setDel(null)}
+        onConfirm={async () => { const t = del!; setDel(null); try { await api.del(`/tokens/${t.id}`); notify('Token revoked'); load() } catch (e) { notifyError(e) } }}>
+        Anything still using it gets "invalid credentials" from now on.
+      </Confirm>
+    </>
   )
 }
 
-const tabs = [
-  { key: 'system', label: 'System', el: <SystemTab /> },
-  { key: 'certificates', label: 'Certificates', el: <CertTab /> },
-  { key: 'ip-groups', label: 'IP Groups', el: <GroupTab /> },
-  { key: 'account', label: 'Account', el: <AccountTab /> },
-  { key: 'tokens', label: 'API Tokens', el: <TokenTab /> },
-]
-
-export default function Settings() {
-  const [params, setParams] = useSearchParams()
-  const tab = params.get('tab') ?? 'system'
+function System() {
+  const { system, sites } = useApp()
+  if (!system) return null
+  const yes = (b: boolean, on: string, off: string) => (b ? <Pill tone="pos">{on}</Pill> : <Pill>{off}</Pill>)
   return (
-    <Box>
-      <PageTitle title="Settings" />
-      <Tabs value={tab} onChange={(_, v) => setParams({ tab: v })} sx={{ mb: 2 }}>
-        {tabs.map((t) => <Tab key={t.key} value={t.key} label={t.label} />)}
-      </Tabs>
-      {tabs.find((t) => t.key === tab)?.el}
-    </Box>
+    <section className="panel">
+      <dl className="kv" style={{ rowGap: 14 }}>
+        <dt>Engine</dt><dd>{system.engine_ok ? <Pill tone="pos">Running</Pill> : <><Pill tone="neg">Unreachable</Pill> <span className="muted">{system.engine_error}</span></>}</dd>
+        <dt>Console version</dt><dd className="num">{system.version}</dd>
+        <dt>Manager started</dt><dd className="num">{dateTime(system.started)}</dd>
+        <dt>Sites</dt><dd className="num">{sites.length}</dd>
+        <dt>Default ports</dt><dd className="num">HTTP {system.http_port}, HTTPS {system.https_port}</dd>
+        <dt>Country lookup</dt><dd>{yes(system.geoip, 'On', 'Not set up')} {system.geoip && <span className="muted">IP geolocation by <a href="https://db-ip.com" target="_blank" rel="noreferrer" style={{ textDecoration: 'underline' }}>DB-IP</a>, CC BY 4.0</span>}</dd>
+        <dt>Traffic counts</dt><dd>{yes(system.access_log, 'Recorded', 'Off')}</dd>
+        <dt>Sites served from files</dt><dd>{yes(system.static_sites, 'Available', 'Not set up')}</dd>
+      </dl>
+    </section>
   )
 }

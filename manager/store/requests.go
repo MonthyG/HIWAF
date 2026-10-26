@@ -140,6 +140,7 @@ const (
 	DimIP      TopDim = "ip"
 	DimUA      TopDim = "ua"
 	DimReferer TopDim = "referer"
+	DimAction  TopDim = "action"
 )
 
 var dimExpr = map[TopDim]string{
@@ -150,6 +151,7 @@ var dimExpr = map[TopDim]string{
 	DimIP:      "client_ip",
 	DimUA:      "ua",
 	DimReferer: "referer",
+	DimAction:  "action",
 }
 
 // TopRequests ranks requests matching f by dim, with blocked counts. Unknown

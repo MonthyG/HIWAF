@@ -1,13 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Alert, Snackbar } from '@mui/material'
 import { api, errText } from './api'
 import type { Me, Protection, SiteView, SystemInfo } from './types'
-
-interface Toast {
-  msg: string
-  severity: 'success' | 'error' | 'info' | 'warning'
-  key: number
-}
 
 interface AppState {
   me: Me | null
@@ -18,7 +11,7 @@ interface AppState {
   reloadSites: () => Promise<void>
   protections: Protection[]
   system: SystemInfo | null
-  notify: (msg: string, severity?: Toast['severity']) => void
+  notify: (msg: string) => void
   notifyError: (e: unknown) => void
 }
 
@@ -30,12 +23,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [sitesLoaded, setSitesLoaded] = useState(false)
   const [protections, setProtections] = useState<Protection[]>([])
   const [system, setSystem] = useState<SystemInfo | null>(null)
-  const [toast, setToast] = useState<Toast | null>(null)
+  const [toast, setToast] = useState<{ msg: string; error: boolean; key: number } | null>(null)
 
-  const notify = useCallback((msg: string, severity: Toast['severity'] = 'success') => {
-    setToast({ msg, severity, key: Date.now() })
-  }, [])
-  const notifyError = useCallback((e: unknown) => notify(errText(e), 'error'), [notify])
+  const notify = useCallback((msg: string) => setToast({ msg, error: false, key: Date.now() }), [])
+  const notifyError = useCallback((e: unknown) => setToast({ msg: errText(e), error: true, key: Date.now() }), [])
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), toast.error ? 8000 : 3200)
+    return () => clearTimeout(t)
+  }, [toast])
 
   const reloadSites = useCallback(async () => {
     try {
@@ -56,21 +52,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const siteById = useMemo(() => Object.fromEntries(sites.map((s) => [s.id, s])), [sites])
 
   return (
-    <Ctx.Provider
-      value={{ me, setMe, sites, sitesLoaded, siteById, reloadSites, protections, system, notify, notifyError }}
-    >
+    <Ctx.Provider value={{ me, setMe, sites, sitesLoaded, siteById, reloadSites, protections, system, notify, notifyError }}>
       {children}
-      <Snackbar
-        key={toast?.key}
-        open={!!toast}
-        autoHideDuration={toast?.severity === 'error' ? 8000 : 3000}
-        onClose={() => setToast(null)}
-        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
-      >
-        <Alert severity={toast?.severity} variant="filled" onClose={() => setToast(null)} sx={{ maxWidth: 640 }}>
-          {toast?.msg}
-        </Alert>
-      </Snackbar>
+      {toast && (
+        <div key={toast.key} className={'toast' + (toast.error ? ' error' : '')} role={toast.error ? 'alert' : 'status'}>
+          {toast.msg}
+        </div>
+      )}
     </Ctx.Provider>
   )
 }

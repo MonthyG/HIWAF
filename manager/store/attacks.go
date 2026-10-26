@@ -53,7 +53,7 @@ func (f AttackFilter) cte() (string, []any) {
 		args = append(args, "%,"+f.Category+",%")
 	}
 	return `WITH q AS (SELECT tx_id, MIN(ts) AS ts, site_id, client_ip, COUNT(*) AS n, MIN(severity) AS sev,
-		GROUP_CONCAT(DISTINCT category) AS cats FROM events` + clause + ` GROUP BY tx_id` + having + `) `, args
+		GROUP_CONCAT(DISTINCT category) AS cats, MAX(country) AS country FROM events` + clause + ` GROUP BY tx_id` + having + `) `, args
 }
 
 func limits(limit, offset int) (int, int) {
@@ -114,9 +114,9 @@ func (s *Store) Attacks(ctx context.Context, f AttackFilter) ([]Attack, int, err
 
 // Group is a client IP's activity on one site.
 type Group struct {
-	SiteID, ClientIP string
-	Count            int
-	First, Last      time.Time
+	SiteID, ClientIP, Country string
+	Count                     int
+	First, Last               time.Time
 }
 
 func scanGroups(rows interface {
@@ -128,7 +128,7 @@ func scanGroups(rows interface {
 	for rows.Next() {
 		var g Group
 		var first, last int64
-		if err := rows.Scan(&g.SiteID, &g.ClientIP, &g.Count, &first, &last); err != nil {
+		if err := rows.Scan(&g.SiteID, &g.ClientIP, &g.Country, &g.Count, &first, &last); err != nil {
 			return nil, err
 		}
 		g.First, g.Last = time.UnixMilli(first).UTC(), time.UnixMilli(last).UTC()
@@ -146,7 +146,7 @@ func (s *Store) AttackGroups(ctx context.Context, f AttackFilter) ([]Group, int,
 		return nil, 0, err
 	}
 	limit, offset := limits(f.Limit, f.Offset)
-	rows, err := s.db.QueryContext(ctx, cte+`SELECT site_id, client_ip, COUNT(*), MIN(ts), MAX(ts) FROM q
+	rows, err := s.db.QueryContext(ctx, cte+`SELECT site_id, client_ip, COALESCE(MAX(country), ''), COUNT(*), MIN(ts), MAX(ts) FROM q
 		GROUP BY site_id, client_ip ORDER BY MAX(ts) DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err
@@ -165,7 +165,7 @@ func (s *Store) EventGroups(ctx context.Context, f EventFilter) ([]Group, int, e
 		return nil, 0, err
 	}
 	limit, offset := limits(f.Limit, f.Offset)
-	rows, err := s.db.QueryContext(ctx, `SELECT site_id, client_ip, COUNT(*), MIN(ts), MAX(ts) FROM events`+clause+
+	rows, err := s.db.QueryContext(ctx, `SELECT site_id, client_ip, COALESCE(MAX(country), ''), COUNT(*), MIN(ts), MAX(ts) FROM events`+clause+
 		` GROUP BY site_id, client_ip ORDER BY MAX(ts) DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err

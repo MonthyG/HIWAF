@@ -6,3 +6,6 @@
 manager/console/dist/*
 !manager/console/dist/.keep
 console/node_modules/
+dist-demo/
+.agents/
+.claude/

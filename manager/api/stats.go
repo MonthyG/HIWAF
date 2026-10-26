@@ -41,6 +41,7 @@ type overviewView struct {
 	Pages      []countView `json:"pages"`
 	IPs        []countView `json:"ips"`
 	Attacks    []countView `json:"attack_types"`
+	Actions    []countView `json:"actions"` // requests per WAF action (deny, rate_limit, auth, wait, challenge, block, allow; "" = passed)
 }
 
 // fill returns points for every step from since to until, zero where the
@@ -116,6 +117,7 @@ func (a *API) overview(w http.ResponseWriter, r *http.Request) {
 	}{
 		{store.DimCountry, 20, &v.Countries}, {store.DimStatus, 10, &v.Status},
 		{store.DimSite, 10, &v.Sites}, {store.DimPage, 10, &v.Pages}, {store.DimIP, 10, &v.IPs},
+		{store.DimAction, 20, &v.Actions},
 	}
 	for _, t := range tops {
 		c, err := a.st.TopRequests(ctx, f, t.dim, t.limit)
@@ -339,6 +341,7 @@ func (a *API) attacks(w http.ResponseWriter, r *http.Request) {
 type groupRowView struct {
 	SiteID   string    `json:"site_id"`
 	ClientIP string    `json:"client_ip"`
+	Country  string    `json:"country"`
 	Count    int       `json:"count"`
 	First    time.Time `json:"first"`
 	Last     time.Time `json:"last"`
@@ -347,7 +350,7 @@ type groupRowView struct {
 func groupRows(gs []store.Group, total int) pageView[groupRowView] {
 	out := pageView[groupRowView]{Items: make([]groupRowView, 0, len(gs)), Total: total}
 	for _, g := range gs {
-		out.Items = append(out.Items, groupRowView{SiteID: g.SiteID, ClientIP: g.ClientIP, Count: g.Count, First: g.First, Last: g.Last})
+		out.Items = append(out.Items, groupRowView{SiteID: g.SiteID, ClientIP: g.ClientIP, Country: g.Country, Count: g.Count, First: g.First, Last: g.Last})
 	}
 	return out
 }
