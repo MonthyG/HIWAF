@@ -204,18 +204,22 @@ func (s *Store) AttackCounts(ctx context.Context, siteID string, since time.Time
 	return out, rows.Err()
 }
 
-// RuleHit is one rule's match count, with the rule's message.
+// RuleHit is one rule's match count, with the rule's message. Stopped counts
+// the matches whose request was stopped; the rest were only watched.
 type RuleHit struct {
 	RuleID, Msg, Category string
-	N                     int
+	N, Stopped            int
 }
 
 // RuleHits returns the rules that matched most since a time (zero = all), for
 // one site or all sites when siteID is empty. Anomaly-score rules are left out.
 func (s *Store) RuleHits(ctx context.Context, siteID string, since time.Time, limit int) ([]RuleHit, error) {
 	clause, args := where(siteID, "waf_match", "", since)
-	rows, err := s.db.QueryContext(ctx, `SELECT rule_id, MAX(msg), MAX(category), COUNT(*) AS n FROM events`+clause+
-		` AND rule_id <> '' AND category <> 'score' GROUP BY rule_id ORDER BY n DESC, rule_id ASC LIMIT ?`, append(args, limit)...)
+	rows, err := s.db.QueryContext(ctx, `SELECT rule_id, MAX(msg), MAX(category), COUNT(*) AS n,
+		COALESCE(SUM(tx_id <> '' AND (EXISTS(SELECT 1 FROM events b WHERE b.type = 'waf_block' AND b.tx_id = e.tx_id)
+			OR EXISTS(SELECT 1 FROM requests x WHERE x.tx_id = e.tx_id AND x.action = 'block'))), 0)
+		FROM events e`+clause+` AND rule_id <> '' AND category <> 'score'
+		GROUP BY rule_id ORDER BY n DESC, rule_id ASC LIMIT ?`, append(args, limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +227,7 @@ func (s *Store) RuleHits(ctx context.Context, siteID string, since time.Time, li
 	var out []RuleHit
 	for rows.Next() {
 		var h RuleHit
-		if err := rows.Scan(&h.RuleID, &h.Msg, &h.Category, &h.N); err != nil {
+		if err := rows.Scan(&h.RuleID, &h.Msg, &h.Category, &h.N, &h.Stopped); err != nil {
 			return nil, err
 		}
 		out = append(out, h)

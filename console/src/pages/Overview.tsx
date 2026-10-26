@@ -363,7 +363,7 @@ export default function Overview() {
           {rules.length ? (
             <div className="table-wrap" style={{ marginTop: 4 }}>
               <table className="responsive rules">
-                <thead><tr><th>Rule</th><th>What it catches</th><th className="hide-phone">Kind</th><th className="n">Matches</th></tr></thead>
+                <thead><tr><th>Rule</th><th>What it catches</th><th className="hide-phone">Kind</th><th className="n">Matches</th><th className="n hide-phone">Watched</th></tr></thead>
                 <tbody>
                   {rules.map((r) => (
                     <tr key={r.id}>
@@ -371,6 +371,7 @@ export default function Overview() {
                       <td className="secondary"><span className="truncate" style={{ display: 'block', maxWidth: 340 }} title={r.msg}>{r.msg}</span></td>
                       <td className="muted hide-phone">{categoryLabel(r.category)}</td>
                       <td className="n num"><span className="meter hide-phone" aria-hidden="true"><i style={{ width: `${topHits ? (r.count / topHits) * 100 : 0}%` }} /></span>{int(r.count)}</td>
+                      <td className={'n num hide-phone' + (r.count > r.stopped ? ' warn-text' : ' muted')} title="Matched on a site in Watch mode, so let through">{int(r.count - r.stopped)}</td>
                     </tr>
                   ))}
                 </tbody>

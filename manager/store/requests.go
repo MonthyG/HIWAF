@@ -180,21 +180,28 @@ func (s *Store) TopRequests(ctx context.Context, f RequestFilter, dim TopDim, li
 	return out, rows.Err()
 }
 
-// SiteCounts returns per-site request and blocked counts since a time.
-func (s *Store) SiteCounts(ctx context.Context, since time.Time) (map[string]Count, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT site_id, COUNT(*), COALESCE(SUM(action IN `+blockedActions+`), 0)
-		FROM requests WHERE ts >= ? GROUP BY site_id`, since.UnixMilli())
+// SiteCount is one site's request, blocked and WAF-stopped counts.
+type SiteCount struct {
+	Requests, Blocked, Threats int
+}
+
+// SiteCounts returns per-site request counts since a time: all requests,
+// those refused or stopped for any reason, and those the WAF stopped.
+func (s *Store) SiteCounts(ctx context.Context, since time.Time) (map[string]SiteCount, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT site_id, COUNT(*), COALESCE(SUM(action IN `+blockedActions+`), 0),
+		COALESCE(SUM(action = 'block'), 0) FROM requests WHERE ts >= ? GROUP BY site_id`, since.UnixMilli())
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[string]Count{}
+	out := map[string]SiteCount{}
 	for rows.Next() {
-		var c Count
-		if err := rows.Scan(&c.Key, &c.N, &c.Blocked); err != nil {
+		var site string
+		var c SiteCount
+		if err := rows.Scan(&site, &c.Requests, &c.Blocked, &c.Threats); err != nil {
 			return nil, err
 		}
-		out[c.Key] = c
+		out[site] = c
 	}
 	return out, rows.Err()
 }
@@ -219,15 +226,16 @@ func (s *Store) RequestByTx(ctx context.Context, tx string) (Request, bool, erro
 }
 
 // LatencyP95 returns the 95th percentile request duration in milliseconds for
-// requests matching f, or 0 when there are none.
+// requests matching f, or 0 when there are none. It sorts descending with the
+// offset counted from the top, so SQLite's sorter only keeps the slowest 5%.
 func (s *Store) LatencyP95(ctx context.Context, f RequestFilter) (float64, error) {
 	clause, args := f.where()
-	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM requests`+clause, args...).Scan(&n); err != nil || n == 0 {
-		return 0, err
-	}
 	var ms float64
-	err := s.db.QueryRowContext(ctx, `SELECT dur_ms FROM requests`+clause+` ORDER BY dur_ms LIMIT 1 OFFSET ?`,
-		append(args, (n*95-1)/100)...).Scan(&ms)
+	err := s.db.QueryRowContext(ctx, `SELECT dur_ms FROM requests`+clause+` ORDER BY dur_ms DESC LIMIT 1
+		OFFSET (SELECT COUNT(*) - 1 - (COUNT(*) * 95 - 1) / 100 FROM requests`+clause+`)`,
+		append(args, args...)...).Scan(&ms)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
 	return ms, err
 }

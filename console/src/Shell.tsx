@@ -24,6 +24,7 @@ const areaLabel: Record<string, string> = { certificates: 'Certificates', accoun
 const modeDot: Record<string, string> = { block: 'var(--positive)', detect: 'var(--warning)', off: '#5b5b60' }
 const modeWord: Record<string, string> = { block: 'Blocking', detect: 'Watching', off: 'Off' }
 const PHONE = '(max-width: 860px)'
+const EDGE = DEMO ? 'edge-tpe-01' : window.location.hostname
 
 /** The menu's content: the pages, then every site. Shared by the sidebar and the phone drawer. */
 function Menu({ onNavigate, counts }: { onNavigate?: () => void; counts: SiteCounts }) {
@@ -39,7 +40,7 @@ function Menu({ onNavigate, counts }: { onNavigate?: () => void; counts: SiteCou
     navigate('/login')
   }
   const ordered = [...sites].sort((a, b) => (counts[b.id]?.blocked ?? 0) - (counts[a.id]?.blocked ?? 0) || siteName(a).localeCompare(siteName(b)))
-  const stopped = Object.values(counts).reduce((n, c) => n + (c.blocked ?? 0), 0)
+  const threats = Object.values(counts).reduce((n, c) => n + (c.threats ?? 0), 0)
   return (
     <>
       <nav aria-label="Pages">
@@ -50,7 +51,7 @@ function Menu({ onNavigate, counts }: { onNavigate?: () => void; counts: SiteCou
               <NavLink key={p.to} to={p.to} className="drawer-link" onClick={onNavigate}>
                 <Icon name={p.icon} />
                 <span>{p.label}</span>
-                {'count' in p && stopped > 0 && <span className="n" title="Stopped today">{int(stopped)}</span>}
+                {'count' in p && threats > 0 && <span className="n" title="Threats stopped today">{int(threats)}</span>}
               </NavLink>
             ))}
           </div>
@@ -70,7 +71,7 @@ function Menu({ onNavigate, counts }: { onNavigate?: () => void; counts: SiteCou
       </ul>
       <NavLink to="/sites/new" className="drawer-add" onClick={onNavigate}><Icon name="plus" /> Add a site</NavLink>
       <div className="node-status" aria-label="Edge status">
-        <div><span>Edge</span><b>{DEMO ? 'edge-tpe-01' : window.location.hostname}</b></div>
+        <div><span>Edge</span><b>{EDGE}</b></div>
         <div><span>Engine</span><b className={system && !system.engine_ok ? 'bad' : ''}>{system ? (system.engine_ok ? 'running' : 'unreachable') : 'checking'}</b></div>
         <div><span>Rule set</span><b>{system?.ruleset ?? '-'}</b></div>
         <div><span>Console</span><b>v{system?.version ?? '-'}</b></div>
@@ -86,27 +87,28 @@ function Menu({ onNavigate, counts }: { onNavigate?: () => void; counts: SiteCou
 /** On phones the menu opens as a drawer over the page. */
 function Drawer({ open, onClose, counts }: { open: boolean; onClose: () => void; counts: SiteCounts }) {
   const ref = useRef<HTMLDialogElement>(null)
+  const [closing, setClosing] = useState(false)
   useEffect(() => {
     const d = ref.current
     if (!d) return
-    if (open && !d.open) { d.classList.remove('closing'); d.showModal() }
-    if (!open && d.open) {
-      // slide out first, then close; with reduced motion close at once
-      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { d.close(); return }
-      d.classList.add('closing')
-      const t = setTimeout(() => { d.classList.remove('closing'); d.close() }, 200)
-      return () => clearTimeout(t)
-    }
+    // reopening mid slide-out cancels it (the cleanup below clears the timer)
+    if (open) { setClosing(false); if (!d.open) d.showModal(); return }
+    if (!d.open) return
+    // slide out first, then close; with reduced motion close at once
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { d.close(); return }
+    setClosing(true)
+    const t = setTimeout(() => { setClosing(false); d.close() }, 200)
+    return () => clearTimeout(t)
   }, [open])
   return (
-    <dialog ref={ref} className="drawer" aria-label="Menu" onClose={onClose} onCancel={(e) => { e.preventDefault(); onClose() }}
+    <dialog ref={ref} className={'drawer' + (closing ? ' closing' : '')} aria-label="Menu" onClose={onClose} onCancel={(e) => { e.preventDefault(); onClose() }}
       onClick={(e) => { if (e.target === ref.current) onClose() }}>
       <div className="drawer-head">
         <IconBtn icon="close" label="Close the menu" onClick={onClose} />
         <Mark size={22} />
         <span className="product">HostingInside WAF</span>
       </div>
-      {open && <Menu onNavigate={onClose} counts={counts} />}
+      {(open || closing) && <Menu onNavigate={onClose} counts={counts} />}
     </dialog>
   )
 }
@@ -120,7 +122,8 @@ function readHidden(): boolean {
 }
 
 export default function Shell() {
-  const { system, sites } = useApp()
+  const { system, sites, siteById } = useApp()
+  const navigate = useNavigate()
   const loc = useLocation()
   const [drawer, setDrawer] = useState(() => DEMO && new URLSearchParams(window.location.hash.split('?')[1]).get('menu') === '1')
   const [hidden, setHidden] = useState(readHidden)
@@ -141,9 +144,6 @@ export default function Shell() {
     setHidden(next)
     try { localStorage.setItem('hiwaf.sidebar', next ? 'hidden' : 'shown') } catch { /* per-browser preference only */ }
   }
-  const edge = DEMO ? 'edge-tpe-01' : window.location.hostname
-  const navigate = useNavigate()
-  const { siteById } = useApp()
   const seg = loc.pathname.split('/').filter(Boolean)
   const crumbs = [{ to: `/${seg[0] ?? 'overview'}`, label: pageLabel[seg[0] ?? 'overview'] ?? 'Overview' }]
   if (seg[0] === 'sites' && seg[1]) crumbs.push({ to: loc.pathname, label: seg[1] === 'new' ? 'Add a site' : siteName(siteById[seg[1]], seg[1]) })
@@ -157,12 +157,12 @@ export default function Shell() {
       </aside>
       <div className="main-col">
         <header className="topbar">
-          <button type="button" className="menu-btn" aria-label={hidden ? 'Show the menu' : 'Hide the menu'} aria-expanded={!hidden && !phone} onClick={toggle}>
+          <button type="button" className="menu-btn" aria-label={phone ? 'Open the menu' : hidden ? 'Show the menu' : 'Hide the menu'} aria-expanded={phone ? drawer : !hidden} onClick={toggle}>
             <span /><span /><span />
           </button>
           <NavLink to="/overview" className="brand topbar-brand" aria-label="HostingInside WAF, overview"><Mark size={24} /><span className="product">HostingInside WAF</span></NavLink>
           <nav className="crumbs" aria-label="You are here">
-            <span className="hide-s">{edge}</span><span className="sep hide-s">/</span>
+            <span className="hide-s">{EDGE}</span><span className="sep hide-s">/</span>
             {crumbs.map((c, i) => (
               <span key={i} style={{ display: 'contents' }}>
                 {i > 0 && <span className="sep">/</span>}

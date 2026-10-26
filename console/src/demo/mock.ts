@@ -64,17 +64,24 @@ function overview(q: URLSearchParams): Overview {
     sites: bySite.sort((a, b) => b.count - a.count),
     attack_types: count(atk.filter((a) => a.blocked || a.severity <= 2), (a) => a.categories[0]),
     actions,
-    rules: ruleHits(atk), p95_ms: requests ? 38.4 : 0,
+    rules: ruleHits(atk), p95_ms: requests ? p95(site, requests, sum((b) => b.err5xx)) : 0,
   }
 }
 
+/** A believable p95 per site: each origin has its own base speed, and 5xx answers drag it up. */
+function p95(site: string, requests: number, err5xx: number) {
+  const base = site ? 3 + ([...site].reduce((n, c) => n + c.charCodeAt(0), 0) % 60) : 24
+  return Math.round((base + 600 * (err5xx / requests)) * 10) / 10
+}
+
 function ruleHits(atk: Attack[]) {
-  const m = new Map<string, { id: string; msg: string; category: string; count: number }>()
+  const m = new Map<string, { id: string; msg: string; category: string; count: number; stopped: number }>()
   for (const a of atk) {
     for (const e of D.matchesByTx[a.tx_id] ?? []) {
       if (!e.rule_id || e.category === 'score') continue
-      const v = m.get(e.rule_id) ?? { id: e.rule_id, msg: e.detail, category: e.category ?? '', count: 0 }
+      const v = m.get(e.rule_id) ?? { id: e.rule_id, msg: e.detail, category: e.category ?? '', count: 0, stopped: 0 }
       v.count++
+      if (a.blocked) v.stopped++
       m.set(e.rule_id, v)
     }
   }
@@ -83,12 +90,13 @@ function ruleHits(atk: Attack[]) {
 
 function siteCounts() {
   const midnight = new Date(D.NOW.getFullYear(), D.NOW.getMonth(), D.NOW.getDate()).getTime()
-  const out: Record<string, { requests: number; blocked: number }> = {}
+  const out: Record<string, { requests: number; blocked: number; threats: number }> = {}
   for (const b of D.buckets) {
     if (b.t < midnight) continue
-    const v = out[b.site] ?? { requests: 0, blocked: 0 }
+    const v = out[b.site] ?? { requests: 0, blocked: 0, threats: 0 }
     v.requests += D.totalOf(b)
     v.blocked += b.block + b.deny + b.rate_limit
+    v.threats += b.block
     out[b.site] = v
   }
   return out

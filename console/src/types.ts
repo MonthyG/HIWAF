@@ -38,7 +38,7 @@ export interface Overview {
   sites: CountView[]; pages: CountView[]; ips: CountView[]; attack_types: CountView[]; actions: CountView[]
   rules: RuleHit[]; p95_ms: number
 }
-export interface RuleHit { id: string; msg: string; category: string; count: number }
+export interface RuleHit { id: string; msg: string; category: string; count: number; stopped: number }
 export interface Page<T> { items: T[]; total: number }
 export interface Attack {
   tx_id: string; ts: string; site_id: string; client_ip: string; country: string; categories: string[]
@@ -68,4 +68,4 @@ export interface SystemInfo {
 }
 export interface Me { username: string; totp_enabled: boolean; kind: 'user' | 'token' }
 export interface Token { id: string; name: string; created: string; last_used?: string; token?: string }
-export type SiteCounts = Record<string, { requests: number; blocked: number }>
+export type SiteCounts = Record<string, { requests: number; blocked: number; threats: number }>

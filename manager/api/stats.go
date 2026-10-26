@@ -51,6 +51,7 @@ type ruleHitView struct {
 	Msg      string `json:"msg"`
 	Category string `json:"category"`
 	Count    int    `json:"count"`
+	Stopped  int    `json:"stopped"` // matches whose request was stopped; the rest were watched
 }
 
 // fill returns points for every step from since to until, zero where the
@@ -161,7 +162,7 @@ func (a *API) overview(w http.ResponseWriter, r *http.Request) {
 	}
 	v.Rules = make([]ruleHitView, 0, len(hits))
 	for _, h := range hits {
-		v.Rules = append(v.Rules, ruleHitView{ID: h.RuleID, Msg: h.Msg, Category: h.Category, Count: h.N})
+		v.Rules = append(v.Rules, ruleHitView{ID: h.RuleID, Msg: h.Msg, Category: h.Category, Count: h.N, Stopped: h.Stopped})
 	}
 	if v.P95MS, err = a.st.LatencyP95(ctx, f); err != nil {
 		a.writeErr(w, err)
@@ -279,7 +280,8 @@ func uaBrowser(ua string) string {
 
 type siteCountView struct {
 	Requests int `json:"requests"`
-	Blocked  int `json:"blocked"`
+	Blocked  int `json:"blocked"` // refused or stopped for any reason
+	Threats  int `json:"threats"` // stopped by the WAF
 }
 
 // siteCounts returns today's (server local midnight) counts per site, for
@@ -294,7 +296,7 @@ func (a *API) siteCounts(w http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]siteCountView{}
 	for k, c := range m {
-		out[k] = siteCountView{Requests: c.N, Blocked: c.Blocked}
+		out[k] = siteCountView{Requests: c.Requests, Blocked: c.Blocked, Threats: c.Threats}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

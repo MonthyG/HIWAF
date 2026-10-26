@@ -69,15 +69,18 @@ func TestRuleHitsAndLatency(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close()
 	base := time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC)
-	ev := func(rule, cat string) Event {
-		return Event{TS: base, SiteID: "s_a", Type: "waf_match", ClientIP: "1.1.1.1", RuleID: rule, Msg: "m" + rule, Category: cat}
+	ev := func(rule, cat, tx string) Event {
+		return Event{TS: base, SiteID: "s_a", Type: "waf_match", ClientIP: "1.1.1.1", RuleID: rule, Msg: "m" + rule, Category: cat, TxID: tx}
 	}
-	require.NoError(t, s.InsertEvents(ctx, []Event{ev("942100", "sqli"), ev("942100", "sqli"), ev("941100", "xss"), ev("949110", "score")}))
+	// t1 is stopped by a block event, t2 by its request's action, t3 only watched
+	require.NoError(t, s.InsertEvents(ctx, []Event{ev("942100", "sqli", "t1"), ev("942100", "sqli", "t3"), ev("941100", "xss", "t2"),
+		ev("949110", "score", "t1"), {TS: base, SiteID: "s_a", Type: "waf_block", ClientIP: "1.1.1.1", TxID: "t1"}}))
+	require.NoError(t, s.InsertRequests(ctx, []Request{{TS: base.Add(-time.Hour), SiteID: "s_a", Action: "block", TxID: "t2"}}))
 	hits, err := s.RuleHits(ctx, "", time.Time{}, 8)
 	require.NoError(t, err)
-	assert.Equal(t, []RuleHit{{"942100", "m942100", "sqli", 2}, {"941100", "m941100", "xss", 1}}, hits)
+	assert.Equal(t, []RuleHit{{"942100", "m942100", "sqli", 2, 1}, {"941100", "m941100", "xss", 1, 1}}, hits)
 
-	p, err := s.LatencyP95(ctx, RequestFilter{})
+	p, err := s.LatencyP95(ctx, RequestFilter{Since: base})
 	require.NoError(t, err)
 	assert.Zero(t, p)
 	var reqs []Request
@@ -85,7 +88,12 @@ func TestRuleHitsAndLatency(t *testing.T) {
 		reqs = append(reqs, Request{TS: base, SiteID: "s_a", DurMS: float64(i)})
 	}
 	require.NoError(t, s.InsertRequests(ctx, reqs))
-	p, err = s.LatencyP95(ctx, RequestFilter{})
+	p, err = s.LatencyP95(ctx, RequestFilter{Since: base})
 	require.NoError(t, err)
 	assert.Equal(t, 95.0, p)
+	one := []Request{{TS: base, SiteID: "s_b", DurMS: 7}} // a single request is its own p95
+	require.NoError(t, s.InsertRequests(ctx, one))
+	p, err = s.LatencyP95(ctx, RequestFilter{SiteID: "s_b"})
+	require.NoError(t, err)
+	assert.Equal(t, 7.0, p)
 }
