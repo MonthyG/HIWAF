@@ -204,6 +204,13 @@
           "trusted_proxies_strict": 1
         }
       }
+    },
+    "pki": {
+      "certificate_authorities": {
+        "local": {
+          "install_trust": false
+        }
+      }
     }
   },
   "logging": {

@@ -239,6 +239,12 @@ func Config(sites []site.Resolved, certs map[string]site.Cert, opt Options) (map
 	if len(tlsApp) > 0 {
 		apps["tls"] = tlsApp
 	}
+	// Caddy's local CA (internal issuer, and the fallback for names ACME
+	// can't serve) would otherwise install its root into the host's trust
+	// store, prompting on desktops; a WAF server has no use for that.
+	apps["pki"] = map[string]any{"certificate_authorities": map[string]any{
+		"local": map[string]any{"install_trust": false},
+	}}
 
 	defaultExclude := append([]string(nil), engineLoggers...)
 	logs := map[string]any{

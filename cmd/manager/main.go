@@ -100,7 +100,7 @@ func loadConfig(path string) (config, error) {
 		}
 	}
 	def(&c.Listen, ":9000")
-	def(&c.CaddyAdmin, "http://127.0.0.1:2019")
+	def(&c.CaddyAdmin, "http://localhost:2019") // Caddy's own default admin address: pushing a different spelling makes Caddy try to bind the port twice
 	def(&c.EventLog, "events.log")
 	def(&c.DBPath, "waf.db")
 	def(&c.DataDir, filepath.Dir(c.DBPath))
@@ -254,7 +254,7 @@ func run(cfgPath string, log *slog.Logger) error {
 	}
 	admin, err := url.Parse(cfg.CaddyAdmin)
 	if err != nil || admin.Host == "" {
-		return fmt.Errorf("caddy_admin must be a URL such as http://127.0.0.1:2019, got %q", cfg.CaddyAdmin)
+		return fmt.Errorf("caddy_admin must be a URL such as http://localhost:2019, got %q", cfg.CaddyAdmin)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
