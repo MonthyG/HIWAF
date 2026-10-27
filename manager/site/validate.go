@@ -122,6 +122,9 @@ func Validate(d Doc, geoEnabled bool) error {
 			}
 		}
 	}
+	if err := validateExclusions(d.Exclusions); err != nil {
+		return err
+	}
 	if rl := d.RateLimit; rl != nil {
 		for _, l := range []struct {
 			name string

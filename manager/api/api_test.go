@@ -299,3 +299,32 @@ func TestBansEngineErrorWording(t *testing.T) {
 		assert.Equal(t, "engine error: boom", e.Error, req[1])
 	}
 }
+
+func TestAddExclusion(t *testing.T) {
+	h, fl := newTestAPI(t)
+	id := createSite(t, h, minimalDoc)
+	path := "/api/v1/sites/" + id + "/exclusions"
+	ex := `{"rule_id":942100,"path_exact":"/search","field":"ARGS:q","note":" null and void "}`
+	rec := do(t, h, "POST", path, ex)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var v siteView
+	decodeBody(t, rec, &v)
+	require.Len(t, v.Resolved.Exclusions, 1)
+	assert.Equal(t, "null and void", v.Resolved.Exclusions[0].Note)
+	b, _ := json.Marshal(fl.configs[len(fl.configs)-1])
+	assert.Contains(t, string(b), "ctl:ruleRemoveTargetById=942100;ARGS:q")
+
+	decodeBody(t, do(t, h, "POST", path, ex), &v)
+	assert.Len(t, v.Resolved.Exclusions, 1, "the same exception again changes nothing")
+	assert.Equal(t, http.StatusBadRequest, do(t, h, "POST", path, `{"rule_id":949110}`).Code)
+	assert.Equal(t, http.StatusBadRequest, do(t, h, "POST", path, `{"rule_id":942100,"field":"ARGS:q,ctl:ruleEngine=Off"}`).Code)
+	assert.Equal(t, http.StatusNotFound, do(t, h, "POST", "/api/v1/sites/s_000000000000/exclusions", `{"rule_id":942100}`).Code)
+
+	// the inspection editor's PATCH of waf leaves exceptions alone
+	rec = do(t, h, "PATCH", "/api/v1/sites/"+id, `{"waf":{"paranoia":2}}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	decodeBody(t, rec, &v)
+	assert.Len(t, v.Resolved.Exclusions, 1)
+	decodeBody(t, do(t, h, "PATCH", "/api/v1/sites/"+id, `{"exclusions":[]}`), &v)
+	assert.Empty(t, v.Resolved.Exclusions)
+}

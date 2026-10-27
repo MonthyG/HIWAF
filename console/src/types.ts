@@ -24,7 +24,9 @@ export interface Resolved {
   auth: { enabled: boolean; users: { username: string }[]; session_ttl_sec: number }
   waiting_room: { enabled: boolean; max_active: number; session_ttl_sec: number }
   block_page: { title: string; message: string }
+  exclusions: Exclusion[]
 }
+export interface Exclusion { rule_id: number; path_exact?: string; path_prefix?: string; field?: string; note?: string }
 export interface SiteView { id: string; created: string; updated: string; doc: Record<string, any>; resolved: Resolved }
 export interface Protection { key: string; label: string; default: boolean }
 export interface CountView { key: string; count: number; blocked?: number }

@@ -27,6 +27,7 @@ const base = (over: Partial<Resolved>): Resolved => ({
   bot_challenge: { enabled: false, difficulty: 4 }, auth: { enabled: false, users: [], session_ttl_sec: 86400 },
   waiting_room: { enabled: false, max_active: 0, session_ttl_sec: 60 },
   block_page: { title: 'Request blocked', message: 'Your request was blocked by the web application firewall.' },
+  exclusions: [],
   ...over,
 })
 
@@ -49,6 +50,7 @@ export const sites: SiteView[] = [
       { name: 'Payment callback', action: 'allow', match: { path_prefix: '/payment/callback', ip: ['210.61.153.0/24'] } },
     ] },
     advanced: { hsts: true, gzip: true, http_redirect: true, keep_host: true },
+    exclusions: [{ rule_id: 942100, path_exact: '/search', field: 'ARGS:q', note: 'Place names like "Null and Void Bay"' }],
   })),
   site(S.tea, 210, base({
     name: 'Lantern Tea Shop', description: 'Online shop for an Alishan oolong grower.',

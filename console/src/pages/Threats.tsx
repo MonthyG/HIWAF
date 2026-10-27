@@ -5,6 +5,7 @@ import { useApp } from '../context'
 import type { Attack, AttackDetail, GroupRow, Page } from '../types'
 import { Btn, Empty, Pager, Pill, Segmented, useInterval } from '../ui'
 import { categoryLabel, categoryLabels, clock, countryName, span, siteName, when } from '../util'
+import ExclusionDialog, { fieldFrom, pathFrom } from './ExclusionDialog'
 
 type Range = '24h' | '7d' | '30d'
 
@@ -22,6 +23,7 @@ export default function Threats() {
   const [rowPage, setRowPage] = useState(0)
   const [openTx, setOpenTx] = useState<string | null>(null)
   const [detail, setDetail] = useState<AttackDetail | null>(null)
+  const [falseAlarm, setFalseAlarm] = useState<{ site: string; rule: number; msg: string; field: string; path: string } | null>(null)
 
   const set = (patch: Record<string, string>) => {
     const next = new URLSearchParams(params)
@@ -154,7 +156,12 @@ export default function Threats() {
                             <div className="match-list">
                               {detail.matches.filter((m) => m.category !== 'score').map((m) => (
                                 <div key={m.id}>
-                                  <div><span className="num muted">Rule {m.rule_id}</span> · {m.detail}</div>
+                                  <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                                    <span className="grow"><span className="num muted">Rule {m.rule_id}</span> · {m.detail}</span>
+                                    {m.category && (
+                                      <Btn small onClick={() => setFalseAlarm({ site: a.site_id, rule: Number(m.rule_id), msg: m.detail, field: fieldFrom(m.data), path: pathFrom(a.uri) })}>False alarm</Btn>
+                                    )}
+                                  </div>
                                   {m.data && <div className="payload code">{m.data}</div>}
                                 </div>
                               ))}
@@ -171,6 +178,8 @@ export default function Threats() {
           ) : <Empty>Choose a source to see what it sent.</Empty>}
         </section>
       </div>
+      <ExclusionDialog open={!!falseAlarm} siteId={falseAlarm?.site ?? ''} rule={falseAlarm?.rule ?? 0} msg={falseAlarm?.msg}
+        field={falseAlarm?.field ?? ''} path={falseAlarm?.path ?? '/'} onClose={() => setFalseAlarm(null)} />
     </>
   )
 }

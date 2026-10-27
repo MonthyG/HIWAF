@@ -70,6 +70,7 @@ type Doc struct {
 	Auth         *AuthDoc        `json:"auth,omitempty"`
 	WaitingRoom  *WaitingRoomDoc `json:"waiting_room,omitempty"`
 	BlockPage    *BlockPageDoc   `json:"block_page,omitempty"`
+	Exclusions   []Exclusion     `json:"exclusions,omitempty"`
 }
 
 // PortDoc is one listening port. Without ports a site listens on the global

@@ -137,7 +137,7 @@ export default function Site() {
             <BotEditor site={site} onDone={() => setOpen(null)} />
           </Stage>
           <Stage k="inspect" title="Threat inspection" on={r.waf.mode !== 'off'}
-            summary={r.waf.mode === 'off' ? 'Off: requests are not inspected.' : <>{r.waf.mode === 'block' ? 'Stops' : 'Logs but lets through'} threats at the <strong>{levelWord[r.waf.paranoia]}</strong> level; {Object.values(r.waf.protections).filter(Boolean).length} of {Object.keys(r.waf.protections).length} kinds checked</>}
+            summary={r.waf.mode === 'off' ? 'Off: requests are not inspected.' : <>{r.waf.mode === 'block' ? 'Stops' : 'Logs but lets through'} threats at the <strong>{levelWord[r.waf.paranoia]}</strong> level; {Object.values(r.waf.protections).filter(Boolean).length} of {Object.keys(r.waf.protections).length} kinds checked{r.exclusions?.length ? `; ${r.exclusions.length} rule exception${r.exclusions.length > 1 ? 's' : ''}` : ''}</>}
             stops={act.block ?? 0} stopsLabel={r.waf.mode === 'detect' ? 'stopped (Watch)' : 'stopped, 24 h'} open={open === 'inspect'} onToggleOpen={() => flip('inspect')}>
             <InspectionEditor site={site} onDone={() => setOpen(null)} />
           </Stage>

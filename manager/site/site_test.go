@@ -138,6 +138,17 @@ func TestValidateErrorsNameField(t *testing.T) {
 		{"feed path dotdot", func(d *Doc) { d.Access = &AccessDoc{BlockIPsFile: "..feed"} }, true, "access.block_ips_file"},
 		{"feed path blank", func(d *Doc) { d.Access = &AccessDoc{BlockIPsFile: "  "} }, true, "access.block_ips_file"},
 		{"difficulty", func(d *Doc) { d.BotChallenge = &ChallengeDoc{Enabled: true, Difficulty: 7} }, true, "bot_challenge.difficulty"},
+		{"exclusion scoring rule", func(d *Doc) { d.Exclusions = []Exclusion{{RuleID: 949110}} }, true, "exclusions[0].rule_id"},
+		{"exclusion set-up rule", func(d *Doc) { d.Exclusions = []Exclusion{{RuleID: 901001}} }, true, "exclusions[0].rule_id"},
+		{"exclusion two paths", func(d *Doc) { d.Exclusions = []Exclusion{{RuleID: 942100, PathExact: "/a", PathPrefix: "/b"}} }, true, "exclusions[0]"},
+		{"exclusion relative path", func(d *Doc) { d.Exclusions = []Exclusion{{RuleID: 942100, PathExact: "search"}} }, true, "exclusions[0].path"},
+		{"exclusion quote in path", func(d *Doc) { d.Exclusions = []Exclusion{{RuleID: 942100, PathPrefix: `/a" "id:1`}} }, true, "exclusions[0].path"},
+		{"exclusion unknown collection", func(d *Doc) { d.Exclusions = []Exclusion{{RuleID: 942100, Field: "TX:score"}} }, true, "exclusions[0].field"},
+		{"exclusion field breaks out", func(d *Doc) { d.Exclusions = []Exclusion{{RuleID: 942100, Field: "ARGS:q,ctl:ruleEngine=Off"}} }, true, "exclusions[0].field"},
+		{"exclusion regex key", func(d *Doc) { d.Exclusions = []Exclusion{{RuleID: 942100, Field: "ARGS:/.*/"}} }, true, "exclusions[0].field"},
+		{"exclusion twice", func(d *Doc) {
+			d.Exclusions = []Exclusion{{RuleID: 942100, Field: "ARGS:q"}, {RuleID: 942100, Field: "ARGS:q", Note: "again"}}
+		}, true, "exclusions[1]"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -164,6 +175,15 @@ func TestValidateAccepts(t *testing.T) {
 		BlockCountries: []string{"cn"},
 		BlockIPsFile:   "spamhaus-drop.txt",
 		Rules:          []access.Rule{{Action: "allow", Match: access.Match{PathPrefix: "/health"}}},
+	}
+	d.Exclusions = []Exclusion{
+		{RuleID: 942100, PathExact: "/search", Field: "ARGS:q", Note: "null and void"},
+		{RuleID: 941160, PathPrefix: "/wp-admin/"},
+		{RuleID: 942550, Field: "ARGS:json.html"},
+		{RuleID: 920420},
+		{RuleID: 942200, Field: "REQUEST_COOKIES:CookieConsent"},
+		{RuleID: 942100, Field: "ARGS:body[0][value]"},
+		{RuleID: 942100, PathExact: "/files/Laporan Keuangan.pdf"},
 	}
 	assert.NoError(t, Validate(d, true))
 	assert.NoError(t, Validate(minimal(), false))

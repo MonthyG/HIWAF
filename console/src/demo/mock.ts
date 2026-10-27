@@ -213,6 +213,11 @@ export function demoRequest(method: string, fullPath: string, body: any): Res {
     if (!s) return notFound
     if (method === 'PATCH' || method === 'PUT') { patchSite(s, body); return ok(s) }
     if (method === 'DELETE') { D.sites.splice(D.sites.indexOf(s), 1); return ok() }
+    if (seg[2] === 'exclusions') {
+      const same = (x: any) => x.rule_id === body.rule_id && x.path_exact === body.path_exact && x.path_prefix === body.path_prefix && x.field === body.field
+      if (!s.resolved.exclusions.some(same)) s.resolved.exclusions = [...s.resolved.exclusions, body]
+      return ok(s)
+    }
     return ok({ files: 12 })
   }
 

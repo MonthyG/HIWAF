@@ -83,6 +83,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/sites/{id}", a.putSite)
 	mux.HandleFunc("PATCH /api/v1/sites/{id}", a.patchSite)
 	mux.HandleFunc("DELETE /api/v1/sites/{id}", a.deleteSite)
+	mux.HandleFunc("POST /api/v1/sites/{id}/exclusions", a.addExclusion)
 	mux.HandleFunc("POST /api/v1/sites/{id}/certificate", a.putCert)
 	mux.HandleFunc("POST /api/v1/sites/{id}/static", a.uploadStatic)
 	mux.HandleFunc("GET /api/v1/site-counts", a.siteCounts)
@@ -452,6 +453,7 @@ type resolvedView struct {
 		Title   string `json:"title"`
 		Message string `json:"message"`
 	} `json:"block_page"`
+	Exclusions []site.Exclusion `json:"exclusions"`
 }
 
 // stripSecrets returns d without auth password hashes.
@@ -494,6 +496,7 @@ func (a *API) view(rec store.SiteRecord) siteView {
 	}
 	v.WaitingRoom.Enabled, v.WaitingRoom.MaxActive, v.WaitingRoom.SessionTTLSec = r.WaitEnabled, r.WaitMax, r.WaitTTL
 	v.BlockPage.Title, v.BlockPage.Message = r.BlockTitle, r.BlockMessage
+	v.Exclusions = append([]site.Exclusion{}, r.Exclusions...)
 	return siteView{ID: rec.ID, Created: rec.Created, Updated: rec.Updated, Doc: stripSecrets(rec.Doc), Resolved: v}
 }
 
@@ -678,6 +681,26 @@ func (a *API) patchSite(w http.ResponseWriter, r *http.Request) {
 		if err := dec.Decode(&d); err != nil {
 			return site.Doc{}, badRequest("", "invalid patch: "+err.Error())
 		}
+		return d, nil
+	})
+}
+
+// addExclusion appends one rule exception to a site (the console's "false
+// alarm" button). Adding one the site already has changes nothing.
+func (a *API) addExclusion(w http.ResponseWriter, r *http.Request) {
+	var e site.Exclusion
+	if err := decode(w, r, &e); err != nil {
+		a.writeErr(w, err)
+		return
+	}
+	e.Note = strings.TrimSpace(e.Note)
+	a.replaceSite(w, r, func(d site.Doc) (site.Doc, error) {
+		for _, x := range d.Exclusions {
+			if x.RuleID == e.RuleID && x.PathExact == e.PathExact && x.PathPrefix == e.PathPrefix && x.Field == e.Field {
+				return d, nil
+			}
+		}
+		d.Exclusions = append(d.Exclusions, e)
 		return d, nil
 	})
 }

@@ -45,6 +45,7 @@ type Resolved struct {
 	ChallengeDifficulty int
 	BlockTitle          string
 	BlockMessage        string
+	Exclusions          []Exclusion
 }
 
 const (
@@ -76,6 +77,7 @@ func Resolve(id string, d Doc) Resolved {
 		r.Domains = append(r.Domains, strings.ToLower(strings.TrimSpace(dom)))
 	}
 	r.Upstreams = append([]string(nil), d.Upstreams...)
+	r.Exclusions = append([]Exclusion(nil), d.Exclusions...)
 	r.Ports = append([]PortDoc(nil), d.Ports...)
 	if d.Type != "" {
 		r.Type = d.Type

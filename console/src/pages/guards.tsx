@@ -6,6 +6,7 @@ import { useApp } from '../context'
 import type { IPGroup, Limit, Rule, SiteView } from '../types'
 import { Btn, ChipsInput, Field, IconBtn, Segmented, Switch } from '../ui'
 import { seconds } from '../util'
+import ExclusionDialog, { exclusionWords } from './ExclusionDialog'
 import RuleDialog, { matchWords } from './RuleDialog'
 
 export function useSave(site: SiteView, done?: () => void) {
@@ -261,6 +262,34 @@ export function InspectionEditor({ site, onDone }: EditorProps) {
         </div>
       </div>
       <Foot busy={busy} err={err} onCancel={onDone} onSave={() => save({ waf: { mode: w.mode, paranoia, anomaly_threshold: threshold, protections: prot } }, 'Inspection saved')} />
+      <Exceptions site={site} />
     </>
+  )
+}
+
+// Rule exceptions, added from a false alarm in Threats or by hand. Removing one saves at once.
+function Exceptions({ site }: { site: SiteView }) {
+  const list = site.resolved.exclusions ?? []
+  const [adding, setAdding] = useState(false)
+  const { busy, err, save } = useSave(site)
+  return (
+    <div className="field" style={{ borderTop: '1px solid var(--rule)', paddingTop: 16 }}>
+      <span className="label">Rule exceptions</span>
+      <p className="muted" style={{ margin: '0 0 8px' }}>
+        {list.length ? 'Rules switched off where they raised false alarms.' : 'None. When a rule stops a real visitor, use False alarm on it in Threats.'}
+      </p>
+      {list.map((e, i) => (
+        <div key={i} className="row" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span className="grow"><span className="code">{exclusionWords(e)}</span>{e.note && <span className="muted"> · {e.note}</span>}</span>
+          <IconBtn icon="trash" label={`Remove: ${exclusionWords(e)}`} disabled={busy}
+            onClick={() => save({ exclusions: list.filter((_, j) => j !== i) }, 'Exception removed')} />
+        </div>
+      ))}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+        <Btn small onClick={() => setAdding(true)}>Add exception</Btn>
+        {err && <span className="error-line" role="alert">{err}</span>}
+      </div>
+      <ExclusionDialog open={adding} siteId={site.id} rule={0} field="" path="/" onClose={() => setAdding(false)} />
+    </div>
   )
 }

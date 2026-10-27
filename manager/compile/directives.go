@@ -9,6 +9,10 @@ import (
 	"hostinginside/waf/manager/site"
 )
 
+// exclusionBaseID numbers the per-path exception rules, one per exception,
+// in the 1-99,999 range left for local rules.
+const exclusionBaseID = 10100
+
 // AllowedMethods widens CRS's GET HEAD POST OPTIONS so REST APIs work.
 const AllowedMethods = "GET HEAD POST OPTIONS PUT PATCH DELETE"
 
@@ -23,8 +27,8 @@ const AllowedContentTypes = "|application/x-www-form-urlencoded| |multipart/form
 
 // Directives returns the Coraza directives for s: the recommended config and
 // CRS setup, the site's paranoia and anomaly thresholds, the allowed methods
-// and content types, the CRS rules, the engine mode, and one
-// SecRuleRemoveById per range of each disabled protection.
+// and content types, the site's rule exceptions, the CRS rules, the engine
+// mode, and one SecRuleRemoveById per range of each disabled protection.
 // The CRS files come from crsDir (an unpacked release, see the rulesets API)
 // or, when it is empty, from the copy built into the engine.
 func Directives(s site.Resolved, crsDir string) string {
@@ -45,7 +49,32 @@ func Directives(s site.Resolved, crsDir string) string {
 	line(`SecAction "id:900200,phase:1,pass,nolog,setvar:'tx.allowed_methods=%s'"`, AllowedMethods)
 	line(`SecAction "id:900220,phase:1,pass,nolog,setvar:'tx.allowed_request_content_type=%s'"`, AllowedContentTypes)
 	line(`SecRule REQUEST_HEADERS:Content-Type "@rx ^application/[a-z0-9.-]+\+json(?:\s*;|$)" "id:10010,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=JSON"`)
+	// Exceptions limited to a path act per request, so they run first.
+	for i, e := range s.Exclusions {
+		path, op := e.PathExact, "@streq"
+		if e.PathPrefix != "" {
+			path, op = e.PathPrefix, "@beginsWith"
+		}
+		if path == "" {
+			continue
+		}
+		ctl := fmt.Sprintf("ctl:ruleRemoveById=%d", e.RuleID)
+		if e.Field != "" {
+			ctl = fmt.Sprintf("ctl:ruleRemoveTargetById=%d;%s", e.RuleID, e.Field)
+		}
+		line(`SecRule REQUEST_FILENAME "%s %s" "id:%d,phase:1,t:none,pass,nolog,%s"`, op, path, exclusionBaseID+i, ctl)
+	}
 	line("Include %s", rules)
+	// Site-wide exceptions change the loaded rules, so they follow them.
+	for _, e := range s.Exclusions {
+		switch {
+		case e.PathExact != "" || e.PathPrefix != "":
+		case e.Field != "":
+			line(`SecRuleUpdateTargetById %d "!%s"`, e.RuleID, e.Field)
+		default:
+			line("SecRuleRemoveById %d", e.RuleID)
+		}
+	}
 	if s.WAFMode == "detect" {
 		line("SecRuleEngine DetectionOnly")
 	} else {

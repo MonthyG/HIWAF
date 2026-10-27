@@ -62,6 +62,28 @@ func TestDirectivesDetectAndDisabled(t *testing.T) {
 	assert.Less(t, strings.Index(d, "@owasp_crs/*.conf"), strings.Index(d, "SecRuleRemoveById"))
 }
 
+func TestDirectivesExclusions(t *testing.T) {
+	r := site.Resolve("s_a", site.Doc{Domains: []string{"a.com"}, Upstreams: []string{"1.1.1.1:80"}, Exclusions: []site.Exclusion{
+		{RuleID: 942100, PathExact: "/search", Field: "ARGS:q"},
+		{RuleID: 941160, PathPrefix: "/wp-admin/"},
+		{RuleID: 942190, Field: "ARGS:text"},
+		{RuleID: 932235},
+	}})
+	d := Directives(r, "")
+	rules := strings.Index(d, "@owasp_crs/*.conf")
+	for _, want := range []string{
+		`SecRule REQUEST_FILENAME "@streq /search" "id:10100,phase:1,t:none,pass,nolog,ctl:ruleRemoveTargetById=942100;ARGS:q"`,
+		`SecRule REQUEST_FILENAME "@beginsWith /wp-admin/" "id:10101,phase:1,t:none,pass,nolog,ctl:ruleRemoveById=941160"`,
+	} {
+		i := strings.Index(d, want)
+		require.GreaterOrEqual(t, i, 0, want)
+		assert.Less(t, i, rules, "a path exception runs before the rules")
+	}
+	for _, want := range []string{`SecRuleUpdateTargetById 942190 "!ARGS:text"`, "SecRuleRemoveById 932235"} {
+		assert.Greater(t, strings.Index(d, want), rules, want)
+	}
+}
+
 func TestDirectivesInstalledRuleset(t *testing.T) {
 	r := site.Resolve("s_a", site.Doc{Domains: []string{"a.com"}, Upstreams: []string{"1.1.1.1:80"}})
 	d := Directives(r, "/data/rulesets/4.30.0")
