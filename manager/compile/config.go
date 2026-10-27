@@ -25,6 +25,7 @@ type Options struct {
 	FeedsDir                           string // block_ips_file names resolve inside it
 	StaticDir                          string // static sites serve <StaticDir>/<site ID>
 	ReservedPorts                      []int  // ports sites may not use (console, admin)
+	CRSDir                             string // an unpacked CRS release to use instead of the built-in rules; empty = built-in
 }
 
 // engineLoggers are the Caddy loggers whose lines go to the events file.
@@ -481,7 +482,7 @@ func siteRoutes(s site.Resolved, opt Options, tls bool) []any {
 		main = append(main, map[string]any{
 			"handler":          "waf",
 			"load_owasp_crs":   true,
-			"directives":       Directives(s),
+			"directives":       Directives(s, opt.CRSDir),
 			"tx_id_req_header": ratelimit.TxHeader,
 		})
 	}

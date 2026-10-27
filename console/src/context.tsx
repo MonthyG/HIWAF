@@ -11,6 +11,7 @@ interface AppState {
   reloadSites: () => Promise<void>
   protections: Protection[]
   system: SystemInfo | null
+  reloadSystem: () => void
   notify: (msg: string) => void
   notifyError: (e: unknown) => void
 }
@@ -42,17 +43,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [notifyError])
 
+  const reloadSystem = useCallback(() => { api.get<SystemInfo>('/system').then(setSystem).catch(() => {}) }, [])
+
   useEffect(() => {
     if (!me) return
     reloadSites()
     api.get<Protection[]>('/protections').then(setProtections).catch(notifyError)
-    api.get<SystemInfo>('/system').then(setSystem).catch(() => {})
-  }, [me, reloadSites, notifyError])
+    reloadSystem()
+    // the engine status in the top bar stays current
+    const t = setInterval(reloadSystem, 30_000)
+    return () => clearInterval(t)
+  }, [me, reloadSites, reloadSystem, notifyError])
 
   const siteById = useMemo(() => Object.fromEntries(sites.map((s) => [s.id, s])), [sites])
 
   return (
-    <Ctx.Provider value={{ me, setMe, sites, sitesLoaded, siteById, reloadSites, protections, system, notify, notifyError }}>
+    <Ctx.Provider value={{ me, setMe, sites, sitesLoaded, siteById, reloadSites, protections, system, reloadSystem, notify, notifyError }}>
       {children}
       {toast && (
         <div key={toast.key} className={'toast' + (toast.error ? ' error' : '')} role={toast.error ? 'alert' : 'status'}>

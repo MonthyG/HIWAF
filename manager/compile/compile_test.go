@@ -49,7 +49,7 @@ func marshal(t *testing.T, v any) string {
 func TestDirectivesDetectAndDisabled(t *testing.T) {
 	r := site.Resolve("s_a", site.Doc{Domains: []string{"a.com"}, Upstreams: []string{"1.1.1.1:80"},
 		WAF: &site.WAFDoc{Mode: "detect", Paranoia: 2, Protections: map[string]bool{"java": false}}})
-	d := Directives(r)
+	d := Directives(r, "")
 	assert.Contains(t, d, "SecRuleEngine DetectionOnly")
 	assert.Contains(t, d, "tx.blocking_paranoia_level=2")
 	assert.Contains(t, d, "SecRuleRemoveById 944000-944999")
@@ -59,10 +59,19 @@ func TestDirectivesDetectAndDisabled(t *testing.T) {
 	assert.Less(t, strings.Index(d, "@owasp_crs/*.conf"), strings.Index(d, "SecRuleRemoveById"))
 }
 
+func TestDirectivesInstalledRuleset(t *testing.T) {
+	r := site.Resolve("s_a", site.Doc{Domains: []string{"a.com"}, Upstreams: []string{"1.1.1.1:80"}})
+	d := Directives(r, "/data/rulesets/4.30.0")
+	assert.Contains(t, d, "Include @coraza.conf-recommended")
+	assert.Contains(t, d, "Include /data/rulesets/4.30.0/crs-setup.conf.example")
+	assert.Contains(t, d, "Include /data/rulesets/4.30.0/rules/*.conf")
+	assert.NotContains(t, d, "@owasp_crs")
+}
+
 func TestDirectivesDataLeakOn(t *testing.T) {
 	r := site.Resolve("s_a", site.Doc{Domains: []string{"a.com"}, Upstreams: []string{"1.1.1.1:80"},
 		WAF: &site.WAFDoc{Protections: map[string]bool{"data_leak": true}}})
-	d := Directives(r)
+	d := Directives(r, "")
 	assert.Contains(t, d, "SecRuleEngine On")
 	assert.Contains(t, d, "SecResponseBodyAccess On")
 	assert.NotContains(t, d, "SecRuleRemoveById")

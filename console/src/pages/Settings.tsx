@@ -3,9 +3,10 @@ import { useNavigate, useParams } from 'react-router-dom'
 import QRCode from 'qrcode'
 import { api, errText } from '../api'
 import { useApp } from '../context'
-import type { Certificate, Me, Token } from '../types'
+import type { Alerts, Backup, Certificate, Me, Rulesets, Token } from '../types'
 import { Btn, Confirm, Dialog, Empty, Field, IconBtn, Pill, Tabs } from '../ui'
 import { daysLeft, dateTime, siteName, when } from '../util'
+import { DEMO } from '../api'
 
 const areas = [
   { value: 'certificates', label: 'Certificates' }, { value: 'account', label: 'Your account' },
@@ -26,7 +27,7 @@ export default function Settings() {
             certificates: 'Certificates you uploaded, soonest to expire first. Sites on automatic certificates need nothing here.',
             account: 'Your password and two-step sign-in for this console.',
             tokens: 'Keys that let scripts and the cloud control plane call the API.',
-            system: 'The engine behind this console and what it is set up with.',
+            system: 'The engine behind this console: its rule set, database backups and who hears when it goes down.',
           }[a]}</p>
         </div>
       </div>
@@ -214,6 +215,7 @@ function System() {
   if (!system) return null
   const yes = (b: boolean, on: string, off: string) => (b ? <Pill tone="pos">{on}</Pill> : <Pill>{off}</Pill>)
   return (
+    <div className="stack">
     <section className="panel">
       <dl className="kv" style={{ rowGap: 14 }}>
         <dt>Engine</dt><dd>{system.engine_ok ? <Pill tone="pos">Running</Pill> : <><Pill tone="neg">Unreachable</Pill> <span className="muted">{system.engine_error}</span></>}</dd>
@@ -225,6 +227,123 @@ function System() {
         <dt>Traffic counts</dt><dd>{yes(system.access_log, 'Recorded', 'Off')}</dd>
         <dt>Sites served from files</dt><dd>{yes(system.static_sites, 'Available', 'Not set up')}</dd>
       </dl>
+    </section>
+    <RulesetPanel />
+    <BackupsPanel />
+    <AlertsPanel />
+    </div>
+  )
+}
+
+function RulesetPanel() {
+  const { notify, notifyError, reloadSystem } = useApp()
+  const [sets, setSets] = useState<Rulesets | null>(null)
+  const [busy, setBusy] = useState('')
+  const load = useCallback(() => api.get<Rulesets>('/rulesets').then(setSets).catch(notifyError), [notifyError])
+  useEffect(() => { load() }, [load])
+  const use = async (version: string, name: string) => {
+    setBusy(version || 'builtin')
+    try { await api.put('/rulesets/active', { version }); notify(`Now running ${name}`); load(); reloadSystem() } catch (e) { notifyError(e) } finally { setBusy('') }
+  }
+  return (
+    <section className="panel flush" aria-labelledby="ruleset-title">
+      <header style={{ padding: 'var(--card-pad) var(--card-pad) 0' }}><h2 id="ruleset-title">Rule set</h2><span className="meta">switching reloads the engine without dropping a connection</span></header>
+      <table className="responsive">
+        <thead><tr><th>OWASP Core Rule Set</th><th>Source</th><th /></tr></thead>
+        <tbody>
+          {(sets?.items ?? []).map((r) => (
+            <tr key={r.version || 'builtin'}>
+              <td className="ident num">{r.name}</td>
+              <td className="muted">{r.version ? 'Installed, signature checked' : 'Built into the engine'}</td>
+              <td className="n">{r.active ? <Pill tone="pos">Running</Pill>
+                : <Btn small disabled={!!busy} onClick={() => use(r.version, r.name)}>{busy === (r.version || 'builtin') ? 'Switching…' : 'Use this'}</Btn>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="muted" style={{ padding: '12px var(--card-pad) var(--card-pad)' }}>
+        To add a newer release, run <span className="code">bash scripts/crs-install.sh 4.30.0</span> on the server. It only installs a release signed by the CRS project.
+        If the engine can't load a rule set, the switch is refused and the current rules keep running.
+      </p>
+    </section>
+  )
+}
+
+function size(n: number) {
+  return n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`
+}
+
+function BackupsPanel() {
+  const { notify, notifyError } = useApp()
+  const [list, setList] = useState<Backup[]>([])
+  const [busy, setBusy] = useState(false)
+  const load = useCallback(() => api.get<Backup[]>('/backups').then(setList).catch(notifyError), [notifyError])
+  useEffect(() => { load() }, [load])
+  return (
+    <section className="panel flush" aria-labelledby="backups-title">
+      <header style={{ padding: 'var(--card-pad) var(--card-pad) 0' }}>
+        <h2 id="backups-title">Database backups</h2>
+        <Btn small icon="plus" disabled={busy} onClick={async () => {
+          setBusy(true)
+          try { const b = await api.post<Backup>('/backups'); notify(`Backup ${b.name} written`); load() } catch (e) { notifyError(e) } finally { setBusy(false) }
+        }}>{busy ? 'Backing up…' : 'Back up now'}</Btn>
+      </header>
+      <table className="responsive">
+        <thead><tr><th>File</th><th className="n">Taken</th><th className="n">Size</th><th /></tr></thead>
+        <tbody>
+          {list.map((b) => (
+            <tr key={b.name}>
+              <td className="ident num">{b.name}</td>
+              <td className="n num">{when(b.created)}</td>
+              <td className="n num">{size(b.size)}</td>
+              <td className="n">{DEMO ? <span className="muted">Download</span> : <a className="card-link" href={`/api/v1/backups/${b.name}`} download>Download</a>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!list.length && <div style={{ padding: '0 var(--card-pad)' }}><Empty>No backups yet. The first one is taken a minute after the manager starts, then once a day.</Empty></div>}
+      <p className="muted" style={{ padding: '12px var(--card-pad) var(--card-pad)' }}>
+        A backup holds the sites, rules, certificates, users and security events, not the traffic counts. It contains private keys and
+        password hashes: keep downloaded copies somewhere safe. To restore, stop the manager and run{' '}
+        <span className="code">manager -config /data/manager.json -restore /data/backups/&lt;file&gt;</span>.
+      </p>
+    </section>
+  )
+}
+
+function AlertsPanel() {
+  const { notify, notifyError } = useApp()
+  const [cur, setCur] = useState<Alerts | null>(null)
+  const [hook, setHook] = useState('')
+  const [beat, setBeat] = useState('')
+  const [err, setErr] = useState<{ field?: string; msg: string } | null>(null)
+  const load = useCallback(() => api.get<Alerts>('/alerts').then((a) => { setCur(a); setHook(a.webhook_url); setBeat(a.heartbeat_url) }).catch(notifyError), [notifyError])
+  useEffect(() => { load() }, [load])
+  const dirty = !!cur && (hook !== cur.webhook_url || beat !== cur.heartbeat_url)
+  return (
+    <section className="panel" aria-labelledby="alerts-title">
+      <header><h2 id="alerts-title">Alerts</h2>{cur?.engine_down_since && <Pill tone="neg">Engine down since {dateTime(cur.engine_down_since)}</Pill>}</header>
+      <form className="stack" style={{ maxWidth: 640 }} onSubmit={async (e) => {
+        e.preventDefault()
+        setErr(null)
+        try { setCur(await api.put<Alerts>('/alerts', { webhook_url: hook, heartbeat_url: beat })); notify('Alert settings saved') } catch (er) { setErr({ field: (er as { field?: string }).field, msg: errText(er) }) }
+      }}>
+        <Field id="alert-hook" label="Webhook" error={err?.field === 'webhook_url' ? err.msg : undefined}
+          hint="A Slack, Discord or any JSON webhook. It hears when the engine stops answering for a minute, when it is back, and when a backup fails.">
+          <input id="alert-hook" className="input" type="url" placeholder="https://hooks.slack.com/services/…" value={hook} onChange={(e) => setHook(e.target.value)} />
+        </Field>
+        <Field id="alert-beat" label="Heartbeat URL" error={err?.field === 'heartbeat_url' ? err.msg : undefined}
+          hint="Pinged every 30 seconds while all is well, for an outside monitor such as Healthchecks.io or Uptime Kuma. It is the only way to hear that this whole server went down.">
+          <input id="alert-beat" className="input" type="url" placeholder="https://hc-ping.com/…" value={beat} onChange={(e) => setBeat(e.target.value)} />
+        </Field>
+        {err && !err.field && <p className="neg-text">{err.msg}</p>}
+        <div className="toolbar" style={{ marginBottom: 0 }}>
+          <button type="submit" className="btn primary" disabled={!dirty}>Save</button>
+          <Btn disabled={!cur?.webhook_url || dirty} onClick={async () => {
+            try { await api.post('/alerts/test'); notify('Test alert sent') } catch (e) { notifyError(e) }
+          }}>Send a test alert</Btn>
+        </div>
+      </form>
     </section>
   )
 }

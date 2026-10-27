@@ -143,7 +143,8 @@ func migrate(db *sql.DB) error {
 // serialises all access and sidesteps SQLITE_BUSY between our own writers.
 // Consequently a Tx callback must use only its *Tx, never the Store.
 type Store struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
 }
 
 // Open opens (creating if needed) the database at path and migrates it.
@@ -158,7 +159,7 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, path: path}, nil
 }
 
 // Close closes the database.
@@ -323,8 +324,28 @@ func (s *Store) Certs(ctx context.Context) (map[string]site.Cert, error) {
 
 // Setting returns a setting value and whether it exists.
 func (s *Store) Setting(ctx context.Context, key string) (string, bool, error) {
+	return setting(ctx, s.db, key)
+}
+
+// SetSetting stores a setting.
+func (s *Store) SetSetting(ctx context.Context, key, val string) error {
+	return setSetting(ctx, s.db, key, val)
+}
+
+// Setting returns a setting value and whether it exists.
+func (t *Tx) Setting(key string) (string, bool, error) { return setting(t.ctx, t.tx, key) }
+
+// SetSetting stores a setting.
+func (t *Tx) SetSetting(key, val string) error { return setSetting(t.ctx, t.tx, key, val) }
+
+type rowQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func setting(ctx context.Context, q rowQueryer, key string) (string, bool, error) {
 	var v string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
+	err := q.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
@@ -334,9 +355,8 @@ func (s *Store) Setting(ctx context.Context, key string) (string, bool, error) {
 	return v, true, nil
 }
 
-// SetSetting stores a setting.
-func (s *Store) SetSetting(ctx context.Context, key, val string) error {
-	_, err := s.db.ExecContext(ctx,
+func setSetting(ctx context.Context, q rowQueryer, key, val string) error {
+	_, err := q.ExecContext(ctx,
 		`INSERT INTO settings(key, value) VALUES(?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, val)
 	return err

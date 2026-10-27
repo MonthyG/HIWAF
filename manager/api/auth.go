@@ -33,7 +33,8 @@ const (
 
 	sessionTTL     = 12 * time.Hour
 	minPassword    = 8
-	maxFailures    = 5
+	maxFailures    = 5  // per client address (IPv6: per /64)
+	maxUserFails   = 50 // per account, from any number of addresses
 	failureWindow  = 15 * time.Minute
 	issuer         = "HostingInside WAF"
 	defaultAdmin   = "admin"
@@ -153,7 +154,7 @@ func ResetAdmin(ctx context.Context, st *store.Store) (string, error) {
 
 // --- login limiter -----------------------------------------------------------
 
-// loginLimiter counts failed logins per client IP.
+// loginLimiter counts failed logins per client address and per account.
 type loginLimiter struct {
 	mu   sync.Mutex
 	fail map[string][]time.Time
@@ -176,10 +177,10 @@ func (l *loginLimiter) recent(key string, now time.Time) []time.Time {
 	return kept
 }
 
-func (l *loginLimiter) blocked(key string, now time.Time) bool {
+func (l *loginLimiter) blocked(key string, now time.Time, max int) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return len(l.recent(key, now)) >= maxFailures
+	return len(l.recent(key, now)) >= max
 }
 
 func (l *loginLimiter) failed(key string, now time.Time) {
@@ -202,6 +203,17 @@ func remoteIP(r *http.Request) string {
 	return host
 }
 
+// clientKey is the login limiter's key for the caller: its IPv4 address, or
+// the /64 of its IPv6 address, since one IPv6 client typically holds a whole
+// /64 and could otherwise use a fresh address for every guess.
+func clientKey(r *http.Request) string {
+	ip := net.ParseIP(remoteIP(r))
+	if ip == nil || ip.To4() != nil {
+		return remoteIP(r)
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
 // --- login / logout / me -----------------------------------------------------
 
 type loginReq struct {
@@ -222,11 +234,15 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, err)
 		return
 	}
-	key, t := remoteIP(r), time.Now()
-	if a.limiter.blocked(key, t) {
+	key, userKey, t := clientKey(r), "user:"+strings.ToLower(req.Username), time.Now()
+	if a.limiter.blocked(key, t, maxFailures) || a.limiter.blocked(userKey, t, maxUserFails) {
 		writeJSON(w, http.StatusTooManyRequests, errBody{Error: "too many failed logins; try again in 15 minutes"})
 		return
 	}
+	// Count the attempt before checking it, so parallel requests can't all
+	// pass the check above; a successful login clears the count.
+	a.limiter.failed(key, t)
+	a.limiter.failed(userKey, t)
 	u, err := a.st.GetUser(r.Context(), req.Username)
 	if err != nil && !errors.Is(err, store.ErrNoUser) {
 		a.writeErr(w, err)
@@ -237,7 +253,6 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		hash = string(dummyHash) // a missing user costs as much as a real one
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)) != nil || u.Username == "" {
-		a.limiter.failed(key, t)
 		writeJSON(w, http.StatusUnauthorized, errBody{Error: "wrong username or password"})
 		return
 	}
@@ -247,12 +262,12 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !validTOTP(u.TOTPSecret, req.TOTP, t) {
-			a.limiter.failed(key, t)
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "wrong two-factor code", "totp_required": true})
 			return
 		}
 	}
 	a.limiter.reset(key)
+	a.limiter.reset(userKey)
 	sid := randomString(sessionIDBytes)
 	exp := t.Add(sessionTTL)
 	if err := a.st.CreateSession(r.Context(), hashHex(sid), u.Username, exp); err != nil {

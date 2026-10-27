@@ -7,6 +7,17 @@ type Res = { status: number; body?: any }
 const ok = (body?: any): Res => ({ status: body === undefined ? 204 : 200, body })
 const notFound: Res = { status: 404, body: { error: 'not found' } }
 
+// Settings > System state the demo can change: rule set, backups and alerts.
+const day = 24 * 3600_000
+const ops = {
+  ruleset: '',
+  backups: [1, 2, 3].map((d) => {
+    const t = new Date(D.NOW.getTime() - d * day + 3600_000 * 3)
+    return { name: `waf-${t.toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-')}.db`, size: 2_400_000 - d * 41_000, created: t.toISOString() }
+  }),
+  alerts: { webhook_url: 'https://hooks.slack.com/services/T000/B000/demo', heartbeat_url: '' },
+}
+
 const HOUR = 3600_000
 let loggedIn = true
 let totp = false
@@ -160,8 +171,27 @@ export function demoRequest(method: string, fullPath: string, body: any): Res {
     ['session_fixation', 'Session fixation'], ['scanner', 'Scanner / bad-bot detection'], ['protocol', 'Protocol attacks + enforcement'],
     ['data_leak', 'Response data leakage (needs response body inspection)'],
   ].map(([key, label]) => ({ key, label, default: key !== 'data_leak' })))
-  if (path === '/system') return ok({ version: '2.0.0', started: new Date(D.NOW.getTime() - 26 * HOUR).toISOString(), engine_ok: true, geoip: true, access_log: true, static_sites: true, http_port: 80, https_port: 443, sites: D.sites.length, ruleset: 'CRS 4.25.0' })
+  if (path === '/system') return ok({ version: '2.0.0', started: new Date(D.NOW.getTime() - 26 * HOUR).toISOString(), engine_ok: true, geoip: true, access_log: true, static_sites: true, http_port: 80, https_port: 443, sites: D.sites.length, ruleset: ops.ruleset ? `CRS ${ops.ruleset}` : 'CRS 4.25.0' })
   if (path === '/site-counts') return ok(siteCounts())
+  if (path === '/rulesets' || path === '/rulesets/active') {
+    if (method === 'PUT') ops.ruleset = body.version
+    const items = ['', '4.30.0'].map((v) => ({ version: v, name: v ? `CRS ${v}` : 'CRS 4.25.0', active: v === ops.ruleset }))
+    return ok(method === 'PUT' ? items.find((x) => x.active) : { dir: '/data/rulesets', items })
+  }
+  if (path === '/backups') {
+    if (method === 'POST') {
+      const t = new Date()
+      const b = { name: `waf-${t.toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-')}.db`, size: 2_480_128, created: t.toISOString() }
+      ops.backups.unshift(b)
+      return { status: 201, body: b }
+    }
+    return ok(ops.backups)
+  }
+  if (path === '/alerts') {
+    if (method === 'PUT') Object.assign(ops.alerts, body)
+    return ok(ops.alerts)
+  }
+  if (path === '/alerts/test') return ok({ sent: true })
   if (path === '/stats/overview') return ok(overview(q))
   if (path === '/waitroom') return ok({ [D.S.harbour]: { active: 132, waiting: 0 } })
 

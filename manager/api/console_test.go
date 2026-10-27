@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -90,6 +91,37 @@ func TestLoginLockout(t *testing.T) {
 	}
 	rec, _ := loginCookie(t, h, "admin", pw, "")
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "locked even with the right password")
+}
+
+func TestLoginLimitPerIPv6Block(t *testing.T) {
+	h, _, _, pw := newConsoleAPI(t)
+	try := func(addr, user, pass string) int {
+		req := httptest.NewRequest("POST", "/api/v1/auth/login", strings.NewReader(`{"username":"`+user+`","password":"`+pass+`"}`))
+		req.RemoteAddr = addr
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	// a new address per guess inside one /64 is still one client
+	for i := 0; i < maxFailures; i++ {
+		assert.Equal(t, http.StatusUnauthorized, try(fmt.Sprintf("[2001:db8::%x]:4000", i+1), "admin", "nope"))
+	}
+	assert.Equal(t, http.StatusTooManyRequests, try("[2001:db8::ffff]:4000", "admin", pw))
+	assert.Equal(t, http.StatusOK, try("[2001:db8:0:1::1]:4000", "admin", pw), "the next /64 is another client")
+}
+
+func TestLoginLimitPerAccount(t *testing.T) {
+	h, _, _, pw := newConsoleAPI(t)
+	for i := 0; i < maxUserFails; i++ {
+		req := httptest.NewRequest("POST", "/api/v1/auth/login", strings.NewReader(`{"username":"Admin","password":"nope"}`))
+		req.RemoteAddr = fmt.Sprintf("198.51.%d.%d:4000", i/250, i%250+1)
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	req := httptest.NewRequest("POST", "/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"`+pw+`"}`))
+	req.RemoteAddr = "203.0.113.9:4000"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "guesses spread over many addresses still lock the account")
 }
 
 func TestTOTPFlow(t *testing.T) {

@@ -66,6 +66,10 @@ export interface SystemInfo {
   version: string; started: string; engine_ok: boolean; engine_error?: string; geoip: boolean; access_log: boolean
   static_sites: boolean; http_port: number; https_port: number; sites: number; ruleset?: string
 }
+export interface Ruleset { version: string; name: string; active: boolean }
+export interface Rulesets { dir: string; items: Ruleset[] }
+export interface Backup { name: string; size: number; created: string }
+export interface Alerts { webhook_url: string; heartbeat_url: string; engine_down_since?: string }
 export interface Me { username: string; totp_enabled: boolean; kind: 'user' | 'token' }
 export interface Token { id: string; name: string; created: string; last_used?: string; token?: string }
 export type SiteCounts = Record<string, { requests: number; blocked: number; threats: number }>

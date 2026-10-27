@@ -33,7 +33,9 @@ import (
 
 	"github.com/oschwald/geoip2-golang"
 
+	"hostinginside/waf/manager/alert"
 	"hostinginside/waf/manager/api"
+	"hostinginside/waf/manager/backup"
 	"hostinginside/waf/manager/caddyclient"
 	"hostinginside/waf/manager/compile"
 	"hostinginside/waf/manager/console"
@@ -61,6 +63,10 @@ type config struct {
 	SelfSignedTLS      bool     `json:"self_signed_tls"` // generate tls_cert/tls_key in data_dir if missing
 	RetentionDays      int      `json:"retention_days"`  // access-log rows; default 7
 	EventRetentionDays int      `json:"event_retention_days"`
+	BackupDir          string   `json:"backup_dir"`   // default <data_dir>/backups
+	BackupHours        int      `json:"backup_hours"` // between backups; default 24, -1 = no scheduled backups
+	BackupKeep         int      `json:"backup_keep"`  // newest backups kept; default 7
+	RulesetsDir        string   `json:"rulesets_dir"` // unpacked CRS releases; default <data_dir>/rulesets
 }
 
 const secretKey = "challenge_secret"
@@ -116,6 +122,11 @@ func loadConfig(path string) (config, error) {
 	if c.EventRetentionDays == 0 {
 		c.EventRetentionDays = 30
 	}
+	def(&c.BackupDir, filepath.Join(c.DataDir, "backups"))
+	def(&c.RulesetsDir, filepath.Join(c.DataDir, "rulesets"))
+	if c.BackupHours == 0 {
+		c.BackupHours = 24
+	}
 	var keys []string
 	for _, k := range c.APIKeys {
 		if k != "" {
@@ -139,7 +150,7 @@ func loadConfig(path string) (config, error) {
 	}
 	// Caddy runs with its own working directory, so paths it opens are made
 	// absolute here; the manager reads the logs at the same paths.
-	for _, p := range []*string{&c.EventLog, &c.AccessLog, &c.GeoIPDB, &c.FeedsDir, &c.StaticDir} {
+	for _, p := range []*string{&c.EventLog, &c.AccessLog, &c.GeoIPDB, &c.FeedsDir, &c.StaticDir, &c.BackupDir, &c.RulesetsDir} {
 		if *p == "" {
 			continue
 		}
@@ -204,13 +215,17 @@ func ensureSelfSigned(certPath, keyPath string) error {
 func main() {
 	cfgPath := flag.String("config", "manager.json", "path to the manager config file")
 	reset := flag.Bool("resetadmin", false, "set a new random password for the console user admin and exit")
+	restore := flag.String("restore", "", "replace the database with this backup file and exit; stop the manager first")
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	slog.SetDefault(log)
 	var err error
-	if *reset {
+	switch {
+	case *reset:
 		err = resetAdmin(*cfgPath)
-	} else {
+	case *restore != "":
+		err = restoreDB(*cfgPath, *restore)
+	default:
 		err = run(*cfgPath, log)
 	}
 	if err != nil {
@@ -234,6 +249,46 @@ func resetAdmin(cfgPath string) error {
 		return err
 	}
 	fmt.Printf("Console user: admin\nNew password: %s\n", pw)
+	return nil
+}
+
+// restoreDB replaces the database with a backup. The current database is kept
+// beside it as <db>.before-restore-<time>. The manager must be stopped: it
+// holds the database open.
+func restoreDB(cfgPath, file string) error {
+	cfg, err := loadConfig(cfgPath)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	if err := store.CheckFile(ctx, file); err != nil {
+		return fmt.Errorf("%s is not a usable backup: %w", file, err)
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(cfg.DBPath); err == nil {
+		// opening and closing folds the write-ahead log into the file, so
+		// the copy kept aside is complete
+		st, err := store.Open(cfg.DBPath)
+		if err != nil {
+			return err
+		}
+		st.Close()
+		aside := cfg.DBPath + ".before-restore-" + time.Now().UTC().Format("20060102-150405")
+		if err := os.Rename(cfg.DBPath, aside); err != nil {
+			return err
+		}
+		fmt.Printf("Current database kept as %s\n", aside)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		_ = os.Remove(cfg.DBPath + suffix)
+	}
+	if err := os.WriteFile(cfg.DBPath, b, 0o600); err != nil {
+		return err
+	}
+	fmt.Printf("Restored %s. Start the manager; it pushes the restored sites to the engine.\n", file)
 	return nil
 }
 
@@ -306,7 +361,19 @@ func run(cfgPath string, log *slog.Logger) error {
 		ACMEInternal:    cfg.ACMEInternal,
 		ReservedPorts:   reserved,
 	}
-	a := api.New(st, &caddyclient.Client{BaseURL: cfg.CaddyAdmin}, opt, cfg.APIKeys)
+	engine := &caddyclient.Client{BaseURL: cfg.CaddyAdmin}
+	a := api.New(st, engine, opt, cfg.APIKeys)
+	host, _ := os.Hostname()
+	notifier := &alert.Notifier{Store: st, Host: host, Log: log}
+	watcher := &alert.Watcher{Notifier: notifier, Probe: func(ctx context.Context) error {
+		_, err := engine.WaitRooms(ctx)
+		return err
+	}}
+	backups := &backup.Backups{Store: st, Dir: cfg.BackupDir, Every: time.Duration(cfg.BackupHours) * time.Hour,
+		Keep: cfg.BackupKeep, Log: log, Failed: func(err error) {
+			notifier.Notify("backup_failed", "the scheduled database backup failed: "+err.Error())
+		}}
+	a.SetOps(api.Ops{RulesetsDir: cfg.RulesetsDir, Backups: backups, Notifier: notifier, Watcher: watcher})
 
 	syncCtx, cancel := context.WithTimeout(ctx, time.Minute)
 	if err := a.Sync(syncCtx); err != nil {
@@ -337,7 +404,7 @@ func run(cfgPath string, log *slog.Logger) error {
 		}
 	}
 
-	done := make(chan struct{}, 3)
+	done := make(chan struct{}, 5)
 	go func() {
 		defer func() { done <- struct{}{} }()
 		_ = (&ingest.Tailer{Path: cfg.EventLog, Store: st, Logger: log, Country: country}).Run(ctx)
@@ -353,6 +420,16 @@ func run(cfgPath string, log *slog.Logger) error {
 	go func() {
 		defer func() { done <- struct{}{} }()
 		purge(ctx, st, cfg, log)
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		watcher.Run(ctx)
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		if cfg.BackupHours > 0 {
+			backups.Run(ctx)
+		}
 	}()
 
 	mux := http.NewServeMux()
@@ -392,7 +469,7 @@ func run(cfgPath string, log *slog.Logger) error {
 		err = srv.Shutdown(shCtx)
 		shCancel()
 	}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < cap(done); i++ {
 		<-done
 	}
 	if errors.Is(err, http.ErrServerClosed) {

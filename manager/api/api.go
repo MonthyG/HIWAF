@@ -34,8 +34,9 @@ const maxBody = 1 << 20
 // Version is reported by GET /api/v1/system.
 var Version = "1.0.0"
 
-// Ruleset names the OWASP Core Rule Set the engine is built with; a test keeps
-// it in step with go.mod's coraza-coreruleset version.
+// Ruleset names the OWASP Core Rule Set built into the engine; a test keeps it
+// in step with go.mod's coraza-coreruleset version. Newer releases can be
+// installed beside it and switched to without a restart (see ops.go).
 const Ruleset = "CRS 4.25.0"
 
 // Loader pushes configs to the engine and manages its bans.
@@ -56,6 +57,7 @@ type API struct {
 	log     *slog.Logger
 	limiter *loginLimiter
 	started time.Time
+	ops     Ops
 }
 
 // New returns an API. Empty keys are ignored.
@@ -110,6 +112,14 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/waitroom", a.waitRooms)
 	mux.HandleFunc("GET /api/v1/protections", a.protections)
 	mux.HandleFunc("GET /api/v1/system", a.system)
+	mux.HandleFunc("GET /api/v1/rulesets", a.listRulesets)
+	mux.HandleFunc("PUT /api/v1/rulesets/active", a.setRuleset)
+	mux.HandleFunc("GET /api/v1/backups", a.listBackups)
+	mux.HandleFunc("POST /api/v1/backups", a.createBackup)
+	mux.HandleFunc("GET /api/v1/backups/{name}", a.downloadBackup)
+	mux.HandleFunc("GET /api/v1/alerts", a.getAlerts)
+	mux.HandleFunc("PUT /api/v1/alerts", a.putAlerts)
+	mux.HandleFunc("POST /api/v1/alerts/test", a.testAlert)
 	// Console account.
 	mux.HandleFunc("POST /api/v1/auth/login", a.login)
 	mux.HandleFunc("POST /api/v1/auth/logout", a.logout)
@@ -197,7 +207,15 @@ func (a *API) apply(ctx context.Context, fn func(*store.Tx) error) error {
 		if err := site.ValidateAll(sites); err != nil {
 			return err
 		}
-		cfg, err := compile.Config(sites, certs, a.opt)
+		opt := a.opt
+		version, _, err := tx.Setting(rulesetKey)
+		if err != nil {
+			return err
+		}
+		if opt.CRSDir, err = a.rulesetDir(version); err != nil {
+			return err
+		}
+		cfg, err := compile.Config(sites, certs, opt)
 		if err != nil {
 			return &httpError{status: http.StatusBadRequest, msg: err.Error()}
 		}

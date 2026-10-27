@@ -522,7 +522,7 @@ type systemView struct {
 }
 
 func (a *API) system(w http.ResponseWriter, r *http.Request) {
-	v := systemView{Version: Version, Ruleset: Ruleset, Started: a.started.UTC(), GeoIP: a.opt.GeoIPDB != "",
+	v := systemView{Version: Version, Ruleset: rulesetName(a.activeRuleset(r.Context())), Started: a.started.UTC(), GeoIP: a.opt.GeoIPDB != "",
 		AccessLog: a.opt.AccessLog != "", StaticSites: a.opt.StaticDir != "",
 		HTTPPort: a.opt.HTTPPort, HTTPSPort: a.opt.HTTPSPort}
 	if _, err := a.cl.WaitRooms(r.Context()); err != nil {

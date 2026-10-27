@@ -303,6 +303,54 @@ use. You can exempt machine paths with an `allow` rule such as
 `{"action":"allow","match":{"path_prefix":"/api/"}}`, but remember that an
 `allow` rule also skips the WAF.
 
+## Operating it
+
+Everything below is also in the console under **Settings > System**.
+
+**Rule set updates.** The engine has CRS 4.25.0 built in. To run a newer
+release, install it on the server; the script only installs a release that
+the CRS project's signing key (fingerprint pinned in the script) signed:
+
+```bash
+bash scripts/crs-install.sh 4.30.0      # unpacks into /data/hiwaf/rulesets/4.30.0
+```
+
+Then pick it in the console, or `PUT /api/v1/rulesets/active` with
+`{"version":"4.30.0"}` (`""` = built-in). The switch is a config reload, so
+no connection is dropped. If the engine can't load the rules, the switch is
+refused and the current rules keep running. It needs at least one site with
+the WAF on, because only then does the engine parse the rules. Upgrading the
+engine binary itself still needs a container restart (a second or two of
+downtime on a single node).
+
+**Backups.** The manager copies its database to `/data/hiwaf/backups` a
+minute after it starts, then every `backup_hours` (default 24; -1 turns the
+schedule off), and keeps the newest `backup_keep` (default 7). A backup holds
+the sites, rules, certificates with their keys, users and security events,
+but not the access log. The files are mode 0600; treat downloaded copies as
+secrets. To restore one:
+
+```bash
+docker compose -f /opt/hiwaf/compose.yaml stop manager
+docker compose -f /opt/hiwaf/compose.yaml run --rm manager manager -config /data/manager.json -restore /data/backups/waf-20261027-030000.db
+docker compose -f /opt/hiwaf/compose.yaml start manager
+```
+
+The current database is kept beside the restored one as
+`waf.db.before-restore-<time>`.
+
+**Alerts.** Set a webhook (Slack, Discord or any JSON endpoint) to hear when
+the engine stops answering for a minute, when it is back, and when a
+scheduled backup fails. The manager runs on the same host, so it can't report
+that the whole host is down: for that, set a heartbeat URL from an outside
+monitor (Healthchecks.io, Uptime Kuma). The manager pings it every 30 s while
+the engine is healthy, and the monitor alerts when the pings stop.
+
+**Console exposure.** The console listens on `:9443` on every interface.
+Sign-in is limited to 5 failures per address (per /64 for IPv6) and 50 per
+account in 15 minutes. Turn on two-step sign-in, and if you can, allow
+`9443` only from your office or VPN in the firewall.
+
 ## Known limits
 
 - **Detection is the OWASP CRS at paranoia 1 by default.** It misses some
@@ -335,7 +383,7 @@ cmd/manager/    manager main
 engine/         Caddy modules: access, auth, challenge, ratelimit, waitroom, events, clientip
 manager/        api, store (SQLite), compile (site -> Caddy JSON), caddyclient, ingest, console (embedded UI)
 console/        web console source (React + MUI; npm run build -> manager/console/dist)
-scripts/        install.sh (Docker install)
+scripts/        install.sh (Docker install), crs-install.sh (signed CRS releases)
 integration/    end-to-end engine tests (in-process Caddy)
 examples/       manager.json, site-shop.json
 build/          build.sh, build.ps1
