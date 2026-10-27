@@ -49,7 +49,7 @@ func marshal(t *testing.T, v any) string {
 func TestDirectivesDetectAndDisabled(t *testing.T) {
 	r := site.Resolve("s_a", site.Doc{Domains: []string{"a.com"}, Upstreams: []string{"1.1.1.1:80"},
 		WAF: &site.WAFDoc{Mode: "detect", Paranoia: 2, Protections: map[string]bool{"java": false}}})
-	d := Directives(r, "")
+	d := Directives(r, "", "")
 	assert.Contains(t, d, "SecRuleEngine DetectionOnly")
 	assert.Contains(t, d, "tx.blocking_paranoia_level=2")
 	assert.Contains(t, d, "SecRuleRemoveById 944000-944999")
@@ -69,7 +69,7 @@ func TestDirectivesExclusions(t *testing.T) {
 		{RuleID: 942190, Field: "ARGS:text"},
 		{RuleID: 932235},
 	}})
-	d := Directives(r, "")
+	d := Directives(r, "", "")
 	rules := strings.Index(d, "@owasp_crs/*.conf")
 	for _, want := range []string{
 		`SecRule REQUEST_FILENAME "@streq /search" "id:10100,phase:1,t:none,pass,nolog,ctl:ruleRemoveTargetById=942100;ARGS:q"`,
@@ -84,9 +84,26 @@ func TestDirectivesExclusions(t *testing.T) {
 	}
 }
 
+func TestDirectivesApps(t *testing.T) {
+	r := site.Resolve("s_a", site.Doc{Domains: []string{"a.com"}, Upstreams: []string{"1.1.1.1:80"},
+		WAF: &site.WAFDoc{Apps: []string{"wordpress", "phpmyadmin"}}})
+	d := Directives(r, "", "/data/crs-plugins")
+	rules := strings.Index(d, "Include @owasp_crs/*.conf")
+	at := func(s string) int {
+		i := strings.Index(d, "Include /data/crs-plugins/"+s)
+		require.GreaterOrEqual(t, i, 0, s)
+		return i
+	}
+	assert.Less(t, at("wordpress/wordpress-rule-exclusions-config.conf"), at("wordpress/wordpress-rule-exclusions-before.conf"))
+	assert.Less(t, at("phpmyadmin/phpmyadmin-rule-exclusions-config.conf"), at("wordpress/wordpress-rule-exclusions-before.conf"), "every config before any before")
+	assert.Less(t, at("phpmyadmin/phpmyadmin-rule-exclusions-before.conf"), rules)
+	assert.Greater(t, at("phpmyadmin/phpmyadmin-rule-exclusions-after.conf"), rules)
+	assert.NotContains(t, Directives(site.Resolve("s_a", site.Doc{Domains: []string{"a.com"}, Upstreams: []string{"1.1.1.1:80"}}), "", "/data/crs-plugins"), "crs-plugins")
+}
+
 func TestDirectivesInstalledRuleset(t *testing.T) {
 	r := site.Resolve("s_a", site.Doc{Domains: []string{"a.com"}, Upstreams: []string{"1.1.1.1:80"}})
-	d := Directives(r, "/data/rulesets/4.30.0")
+	d := Directives(r, "/data/rulesets/4.30.0", "")
 	assert.Contains(t, d, "Include @coraza.conf-recommended")
 	assert.Contains(t, d, "Include /data/rulesets/4.30.0/crs-setup.conf.example")
 	assert.Contains(t, d, "Include /data/rulesets/4.30.0/rules/*.conf")
@@ -96,7 +113,7 @@ func TestDirectivesInstalledRuleset(t *testing.T) {
 func TestDirectivesDataLeakOn(t *testing.T) {
 	r := site.Resolve("s_a", site.Doc{Domains: []string{"a.com"}, Upstreams: []string{"1.1.1.1:80"},
 		WAF: &site.WAFDoc{Protections: map[string]bool{"data_leak": true}}})
-	d := Directives(r, "")
+	d := Directives(r, "", "")
 	assert.Contains(t, d, "SecRuleEngine On")
 	assert.Contains(t, d, "SecResponseBodyAccess On")
 	assert.NotContains(t, d, "SecRuleRemoveById")

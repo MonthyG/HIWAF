@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"hostinginside/waf/manager/crsplugins"
 	"hostinginside/waf/manager/site"
 )
 
@@ -30,8 +31,10 @@ const AllowedContentTypes = "|application/x-www-form-urlencoded| |multipart/form
 // and content types, the site's rule exceptions, the CRS rules, the engine
 // mode, and one SecRuleRemoveById per range of each disabled protection.
 // The CRS files come from crsDir (an unpacked release, see the rulesets API)
-// or, when it is empty, from the copy built into the engine.
-func Directives(s site.Resolved, crsDir string) string {
+// or, when it is empty, from the copy built into the engine. The site's app
+// profiles are CRS plugins under pluginsDir/<app>/, loaded around the rules
+// in CRS's plugin order: config, before, the rules, after.
+func Directives(s site.Resolved, crsDir, pluginsDir string) string {
 	var b strings.Builder
 	line := func(format string, a ...any) {
 		fmt.Fprintf(&b, format, a...)
@@ -49,6 +52,18 @@ func Directives(s site.Resolved, crsDir string) string {
 	line(`SecAction "id:900200,phase:1,pass,nolog,setvar:'tx.allowed_methods=%s'"`, AllowedMethods)
 	line(`SecAction "id:900220,phase:1,pass,nolog,setvar:'tx.allowed_request_content_type=%s'"`, AllowedContentTypes)
 	line(`SecRule REQUEST_HEADERS:Content-Type "@rx ^application/[a-z0-9.-]+\+json(?:\s*;|$)" "id:10010,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=JSON"`)
+	plugins := func(stage func(crsplugins.Stages) []string) {
+		if pluginsDir == "" {
+			return
+		}
+		for _, app := range s.Apps {
+			for _, f := range stage(crsplugins.Files(app)) {
+				line("Include %s/%s/%s", pluginsDir, app, f)
+			}
+		}
+	}
+	plugins(func(st crsplugins.Stages) []string { return st.Config })
+	plugins(func(st crsplugins.Stages) []string { return st.Before })
 	// Exceptions limited to a path act per request, so they run first.
 	for i, e := range s.Exclusions {
 		path, op := e.PathExact, "@streq"
@@ -65,6 +80,7 @@ func Directives(s site.Resolved, crsDir string) string {
 		line(`SecRule REQUEST_FILENAME "%s %s" "id:%d,phase:1,t:none,pass,nolog,%s"`, op, path, exclusionBaseID+i, ctl)
 	}
 	line("Include %s", rules)
+	plugins(func(st crsplugins.Stages) []string { return st.After })
 	// Site-wide exceptions change the loaded rules, so they follow them.
 	for _, e := range s.Exclusions {
 		switch {

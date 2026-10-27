@@ -5,6 +5,7 @@ import { useApp } from '../context'
 import type { Attack, Certificate, Overview, Page, SiteView } from '../types'
 import { Btn, ChipsInput, Confirm, Empty, Field, Segmented, Switch, Tabs } from '../ui'
 import { categoryLabel, clock, int, pct, seconds, siteName, when } from '../util'
+import { appLabels } from './AppPicker'
 import { ChartBox } from './Overview'
 import { AccessEditor, BotEditor, GateEditor, InspectionEditor, QueueEditor, RateEditor, useSave } from './guards'
 import { originWords } from './Sites'
@@ -39,7 +40,7 @@ function Stage({ k, title, on, summary, stops, stopsLabel, open, onToggleOpen, t
 
 export default function Site() {
   const { id = '' } = useParams()
-  const { siteById, sitesLoaded, notify, notifyError, reloadSites } = useApp()
+  const { siteById, sitesLoaded, notify, notifyError, reloadSites, apps } = useApp()
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const tab = (params.get('tab') as Tab) || 'guards'
@@ -137,7 +138,7 @@ export default function Site() {
             <BotEditor site={site} onDone={() => setOpen(null)} />
           </Stage>
           <Stage k="inspect" title="Threat inspection" on={r.waf.mode !== 'off'}
-            summary={r.waf.mode === 'off' ? 'Off: requests are not inspected.' : <>{r.waf.mode === 'block' ? 'Stops' : 'Logs but lets through'} threats at the <strong>{levelWord[r.waf.paranoia]}</strong> level; {Object.values(r.waf.protections).filter(Boolean).length} of {Object.keys(r.waf.protections).length} kinds checked{r.exclusions?.length ? `; ${r.exclusions.length} rule exception${r.exclusions.length > 1 ? 's' : ''}` : ''}</>}
+            summary={r.waf.mode === 'off' ? 'Off: requests are not inspected.' : <>{r.waf.mode === 'block' ? 'Stops' : 'Logs but lets through'} threats at the <strong>{levelWord[r.waf.paranoia]}</strong> level; {Object.values(r.waf.protections).filter(Boolean).length} of {Object.keys(r.waf.protections).length} kinds checked{r.waf.apps?.length ? <>; <strong>{appLabels(r.waf.apps, apps)}</strong> admin allowed</> : ''}{r.exclusions?.length ? `; ${r.exclusions.length} rule exception${r.exclusions.length > 1 ? 's' : ''}` : ''}</>}
             stops={act.block ?? 0} stopsLabel={r.waf.mode === 'detect' ? 'stopped (Watch)' : 'stopped, 24 h'} open={open === 'inspect'} onToggleOpen={() => flip('inspect')}>
             <InspectionEditor site={site} onDone={() => setOpen(null)} />
           </Stage>

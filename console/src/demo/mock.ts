@@ -171,6 +171,15 @@ export function demoRequest(method: string, fullPath: string, body: any): Res {
     ['session_fixation', 'Session fixation'], ['scanner', 'Scanner / bad-bot detection'], ['protocol', 'Protocol attacks + enforcement'],
     ['data_leak', 'Response data leakage (needs response body inspection)'],
   ].map(([key, label]) => ({ key, label, default: key !== 'data_leak' })))
+  if (path === '/apps') return ok([
+    ['wordpress', 'WordPress', 'Saving posts and pages in both editors, media, menus, widgets and settings. Comment fields are left to WordPress’s own filter.', ['/wp-admin/', '/wp-json/', '/wp-login.php']],
+    ['drupal', 'Drupal', 'Saving content and using the admin forms.', ['/node/', '/admin/structure', '/admin/config']],
+    ['nextcloud', 'Nextcloud', 'File sync and uploads (including WebDAV methods), sharing, and editing documents.', ['/remote.php/', '/ocs/', '/index.php/apps/']],
+    ['phpmyadmin', 'phpMyAdmin', 'Running SQL from its query box and editing rows.', ['/phpmyadmin/']],
+    ['dokuwiki', 'DokuWiki', 'Editing and saving wiki pages.', ['/doku.php', '/lib/exe/']],
+    ['phpbb', 'phpBB', 'Posting, private messages and the admin panel.', ['/posting.php', '/ucp.php', '/adm/']],
+    ['xenforo', 'XenForo', 'Posting, conversations and the admin panel.', ['/threads/', '/admin.php']],
+  ].map(([key, label, summary, paths]) => ({ key, label, summary, paths })))
   if (path === '/system') return ok({ version: '2.0.0', started: new Date(D.NOW.getTime() - 26 * HOUR).toISOString(), engine_ok: true, geoip: true, access_log: true, static_sites: true, http_port: 80, https_port: 443, sites: D.sites.length, ruleset: ops.ruleset ? `CRS ${ops.ruleset}` : 'CRS 4.25.0' })
   if (path === '/site-counts') return ok(siteCounts())
   if (path === '/rulesets' || path === '/rulesets/active') {

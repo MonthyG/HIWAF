@@ -25,6 +25,7 @@ import (
 	"hostinginside/waf/engine/ratelimit"
 	"hostinginside/waf/manager/caddyclient"
 	"hostinginside/waf/manager/compile"
+	"hostinginside/waf/manager/crsplugins"
 	"hostinginside/waf/manager/site"
 	"hostinginside/waf/manager/store"
 )
@@ -113,6 +114,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/bans", a.unban)
 	mux.HandleFunc("GET /api/v1/waitroom", a.waitRooms)
 	mux.HandleFunc("GET /api/v1/protections", a.protections)
+	mux.HandleFunc("GET /api/v1/apps", a.apps)
 	mux.HandleFunc("GET /api/v1/system", a.system)
 	mux.HandleFunc("GET /api/v1/rulesets", a.listRulesets)
 	mux.HandleFunc("PUT /api/v1/rulesets/active", a.setRuleset)
@@ -217,6 +219,7 @@ func (a *API) apply(ctx context.Context, fn func(*store.Tx) error) error {
 		if opt.CRSDir, err = a.rulesetDir(version); err != nil {
 			return err
 		}
+		opt.PluginsDir = a.ops.PluginsDir
 		cfg, err := compile.Config(sites, certs, opt)
 		if err != nil {
 			return &httpError{status: http.StatusBadRequest, msg: err.Error()}
@@ -419,6 +422,7 @@ type resolvedView struct {
 		Paranoia         int             `json:"paranoia"`
 		AnomalyThreshold int             `json:"anomaly_threshold"`
 		Protections      map[string]bool `json:"protections"`
+		Apps             []string        `json:"apps"`
 	} `json:"waf"`
 	RateLimit struct {
 		Access *ratelimit.Limit `json:"access"`
@@ -483,6 +487,7 @@ func (a *API) view(rec store.SiteRecord) siteView {
 	v.TLS.Mode, v.TLS.CertID = r.TLSMode, r.CertID
 	v.WAF.Mode, v.WAF.Paranoia, v.WAF.AnomalyThreshold, v.WAF.Protections =
 		r.WAFMode, r.Paranoia, r.AnomalyThreshold, r.Protections
+	v.WAF.Apps = append([]string{}, r.Apps...)
 	v.RateLimit.Access, v.RateLimit.Attack, v.RateLimit.Error = r.Access, r.Attack, r.Error
 	v.Access.AllowIPs, v.Access.BlockIPs = r.AllowIPs, r.BlockIPs
 	v.Access.AllowCountries, v.Access.BlockCountries = r.AllowCountries, r.BlockCountries
@@ -527,6 +532,9 @@ func (a *API) prepareDoc(d *site.Doc, prev *site.Doc) error {
 	}
 	if err := site.Validate(*d, a.opt.GeoIPDB != ""); err != nil {
 		return err
+	}
+	if d.WAF != nil && len(d.WAF.Apps) > 0 && a.ops.PluginsDir == "" {
+		return badRequest("waf.apps", "app profiles are not set up on this server")
 	}
 	if d.Auth != nil {
 		for i, u := range d.Auth.Users {
@@ -940,6 +948,15 @@ type protectionView struct {
 	Key     string `json:"key"`
 	Label   string `json:"label"`
 	Default bool   `json:"default"`
+}
+
+// apps lists the app profiles; none when this manager has no plugins directory.
+func (a *API) apps(w http.ResponseWriter, r *http.Request) {
+	if a.ops.PluginsDir == "" {
+		writeJSON(w, http.StatusOK, []crsplugins.App{})
+		return
+	}
+	writeJSON(w, http.StatusOK, crsplugins.Catalog)
 }
 
 func (a *API) protections(w http.ResponseWriter, r *http.Request) {

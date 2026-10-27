@@ -22,6 +22,7 @@ import (
 // its built-in rules.
 type Ops struct {
 	RulesetsDir string // holds unpacked CRS releases, one directory per version
+	PluginsDir  string // the app profiles' CRS plugins (crsplugins.Install); empty turns profiles off
 	Backups     *backup.Backups
 	Notifier    *alert.Notifier
 	Watcher     *alert.Watcher

@@ -14,7 +14,7 @@ export interface Resolved {
   redirect: { url: string; code: number; preserve_path: boolean }
   advanced: { hsts: boolean; gzip: boolean; http_redirect: boolean; keep_host: boolean }
   tls: { mode: 'auto' | 'uploaded' | 'off'; cert_id: string }
-  waf: { mode: Mode; paranoia: number; anomaly_threshold: number; protections: Record<string, boolean> }
+  waf: { mode: Mode; paranoia: number; anomaly_threshold: number; protections: Record<string, boolean>; apps?: string[] }
   rate_limit: { access: Limit | null; attack: Limit | null; error: Limit | null }
   access: {
     allow_ips: string[] | null; block_ips: string[] | null; allow_countries: string[] | null; block_countries: string[] | null
@@ -29,6 +29,8 @@ export interface Resolved {
 export interface Exclusion { rule_id: number; path_exact?: string; path_prefix?: string; field?: string; note?: string }
 export interface SiteView { id: string; created: string; updated: string; doc: Record<string, any>; resolved: Resolved }
 export interface Protection { key: string; label: string; default: boolean }
+// An app profile: CRS's own exclusions for one web application's normal admin and editor traffic.
+export interface AppProfile { key: string; label: string; summary: string; paths: string[] }
 export interface CountView { key: string; count: number; blocked?: number }
 export interface Point { t: string; requests: number; blocked: number }
 export interface Overview {

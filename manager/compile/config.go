@@ -26,6 +26,7 @@ type Options struct {
 	StaticDir                          string // static sites serve <StaticDir>/<site ID>
 	ReservedPorts                      []int  // ports sites may not use (console, admin)
 	CRSDir                             string // an unpacked CRS release to use instead of the built-in rules; empty = built-in
+	PluginsDir                         string // the app profiles' CRS plugins, one directory per app (crsplugins.Install)
 }
 
 // engineLoggers are the Caddy loggers whose lines go to the events file.
@@ -482,7 +483,7 @@ func siteRoutes(s site.Resolved, opt Options, tls bool) []any {
 		main = append(main, map[string]any{
 			"handler":          "waf",
 			"load_owasp_crs":   true,
-			"directives":       Directives(s, opt.CRSDir),
+			"directives":       Directives(s, opt.CRSDir, opt.PluginsDir),
 			"tx_id_req_header": ratelimit.TxHeader,
 		})
 	}

@@ -6,6 +6,7 @@ import { useApp } from '../context'
 import type { IPGroup, Limit, Rule, SiteView } from '../types'
 import { Btn, ChipsInput, Field, IconBtn, Segmented, Switch } from '../ui'
 import { seconds } from '../util'
+import { AppPicker } from './AppPicker'
 import ExclusionDialog, { exclusionWords } from './ExclusionDialog'
 import RuleDialog, { matchWords } from './RuleDialog'
 
@@ -241,9 +242,15 @@ export function InspectionEditor({ site, onDone }: EditorProps) {
   const [paranoia, setParanoia] = useState(w.paranoia)
   const [threshold, setThreshold] = useState(w.anomaly_threshold)
   const [prot, setProt] = useState(w.protections)
+  const [apps, setApps] = useState(w.apps ?? [])
   const { busy, err, save } = useSave(site, onDone)
   return (
     <>
+      <div className="field">
+        <span className="label">This site runs</span>
+        <p className="muted" style={{ margin: '0 0 8px' }}>Lets the app’s own admin and editor pages work. Everything else stays fully checked.</p>
+        <AppPicker value={apps} onChange={setApps} />
+      </div>
       <Field label="How strict" id="lvl" hint={levels.find((l) => l.p === paranoia)?.hint}>
         <Segmented label="How strict" value={paranoia} onChange={setParanoia} options={levels.map((l) => ({ value: l.p, label: l.label }))} />
       </Field>
@@ -261,7 +268,7 @@ export function InspectionEditor({ site, onDone }: EditorProps) {
           ))}
         </div>
       </div>
-      <Foot busy={busy} err={err} onCancel={onDone} onSave={() => save({ waf: { mode: w.mode, paranoia, anomaly_threshold: threshold, protections: prot } }, 'Inspection saved')} />
+      <Foot busy={busy} err={err} onCancel={onDone} onSave={() => save({ waf: { mode: w.mode, paranoia, anomaly_threshold: threshold, protections: prot, apps } }, 'Inspection saved')} />
       <Exceptions site={site} />
     </>
   )

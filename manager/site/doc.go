@@ -129,6 +129,7 @@ type WAFDoc struct {
 	Paranoia         int             `json:"paranoia,omitempty"`
 	AnomalyThreshold int             `json:"anomaly_threshold,omitempty"`
 	Protections      map[string]bool `json:"protections,omitempty"`
+	Apps             []string        `json:"apps,omitempty"` // app profiles: crsplugins.Catalog keys
 }
 
 // RateLimitDoc holds the three limits; each distinguishes omitted from null.

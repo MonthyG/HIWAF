@@ -4,6 +4,7 @@ import { api, errText } from '../api'
 import { useApp } from '../context'
 import type { Certificate, SiteView } from '../types'
 import { Btn, ChipsInput, Field } from '../ui'
+import { AppPicker } from './AppPicker'
 
 type Kind = 'proxy' | 'static' | 'redirect'
 
@@ -18,6 +19,7 @@ export default function SiteNew() {
   const [origins, setOrigins] = useState('')
   const [target, setTarget] = useState('')
   const [keepPath, setKeepPath] = useState(true)
+  const [apps, setApps] = useState<string[]>([])
   const [tls, setTls] = useState('auto')
   const [httpPort, setHttpPort] = useState(system?.http_port ?? 80)
   const [httpsPort, setHttpsPort] = useState(system?.https_port ?? 443)
@@ -41,6 +43,7 @@ export default function SiteNew() {
       tls: tls === 'auto' ? { mode: 'auto' } : tls === 'off' ? { mode: 'off' } : { mode: 'uploaded', cert_id: tls },
     }
     if (kind === 'proxy') doc.upstreams = origins.split(/[\s,]+/).filter(Boolean)
+    if (kind === 'proxy' && apps.length) doc.waf = { apps }
     if (kind === 'redirect') doc.redirect = { url: target.trim(), code: 301, preserve_path: keepPath }
     setBusy(true)
     try {
@@ -110,6 +113,12 @@ export default function SiteNew() {
             )}
           </div>
         </div>
+        {kind === 'proxy' && (
+          <div className="setting">
+            <div><h2>What runs there</h2><p className="desc">Tick the software behind this site so its own admin and editor pages aren’t mistaken for attacks. Leave all unticked for custom code.</p></div>
+            <AppPicker value={apps} onChange={setApps} />
+          </div>
+        )}
         <div className="setting">
           <div><h2>Encryption</h2><p className="desc">HTTPS on {httpsPort}; plain HTTP on {httpPort} redirects to it.</p></div>
           <div style={{ display: 'grid', gap: 16 }}>

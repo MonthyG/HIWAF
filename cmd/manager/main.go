@@ -39,6 +39,7 @@ import (
 	"hostinginside/waf/manager/caddyclient"
 	"hostinginside/waf/manager/compile"
 	"hostinginside/waf/manager/console"
+	"hostinginside/waf/manager/crsplugins"
 	"hostinginside/waf/manager/ingest"
 	"hostinginside/waf/manager/store"
 )
@@ -67,6 +68,7 @@ type config struct {
 	BackupHours        int      `json:"backup_hours"` // between backups; default 24, -1 = no scheduled backups
 	BackupKeep         int      `json:"backup_keep"`  // newest backups kept; default 7
 	RulesetsDir        string   `json:"rulesets_dir"` // unpacked CRS releases; default <data_dir>/rulesets
+	PluginsDir         string   `json:"plugins_dir"`  // app profiles' CRS plugins, rewritten at start; default <data_dir>/crs-plugins
 }
 
 const secretKey = "challenge_secret"
@@ -124,6 +126,7 @@ func loadConfig(path string) (config, error) {
 	}
 	def(&c.BackupDir, filepath.Join(c.DataDir, "backups"))
 	def(&c.RulesetsDir, filepath.Join(c.DataDir, "rulesets"))
+	def(&c.PluginsDir, filepath.Join(c.DataDir, "crs-plugins"))
 	if c.BackupHours == 0 {
 		c.BackupHours = 24
 	}
@@ -150,7 +153,7 @@ func loadConfig(path string) (config, error) {
 	}
 	// Caddy runs with its own working directory, so paths it opens are made
 	// absolute here; the manager reads the logs at the same paths.
-	for _, p := range []*string{&c.EventLog, &c.AccessLog, &c.GeoIPDB, &c.FeedsDir, &c.StaticDir, &c.BackupDir, &c.RulesetsDir} {
+	for _, p := range []*string{&c.EventLog, &c.AccessLog, &c.GeoIPDB, &c.FeedsDir, &c.StaticDir, &c.BackupDir, &c.RulesetsDir, &c.PluginsDir} {
 		if *p == "" {
 			continue
 		}
@@ -377,7 +380,11 @@ func run(cfgPath string, log *slog.Logger) error {
 		Keep: cfg.BackupKeep, Log: log, Failed: func(err error) {
 			notifier.Notify("backup_failed", "the scheduled database backup failed: "+err.Error())
 		}}
-	a.SetOps(api.Ops{RulesetsDir: cfg.RulesetsDir, Backups: backups, Notifier: notifier, Watcher: watcher})
+	// the engine reads the app profiles from here; they ship with this binary
+	if err := crsplugins.Install(cfg.PluginsDir); err != nil {
+		return fmt.Errorf("plugins_dir: %w", err)
+	}
+	a.SetOps(api.Ops{RulesetsDir: cfg.RulesetsDir, PluginsDir: cfg.PluginsDir, Backups: backups, Notifier: notifier, Watcher: watcher})
 	a.SetAdminNote(note)
 
 	syncCtx, cancel := context.WithTimeout(ctx, time.Minute)

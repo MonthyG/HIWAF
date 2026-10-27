@@ -34,6 +34,7 @@ type Resolved struct {
 	Paranoia            int
 	AnomalyThreshold    int
 	Protections         map[string]bool
+	Apps                []string
 	Access, Attack      *ratelimit.Limit
 	Error               *ratelimit.Limit
 	AllowIPs, BlockIPs  []string
@@ -127,6 +128,7 @@ func Resolve(id string, d Doc) Resolved {
 		if w.AnomalyThreshold != 0 {
 			r.AnomalyThreshold = w.AnomalyThreshold
 		}
+		r.Apps = append([]string(nil), w.Apps...)
 		for k, v := range w.Protections {
 			if _, known := r.Protections[k]; known {
 				r.Protections[k] = v

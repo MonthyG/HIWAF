@@ -15,6 +15,7 @@ import (
 	"hostinginside/waf/manager/backup"
 	"hostinginside/waf/manager/caddyclient"
 	"hostinginside/waf/manager/compile"
+	"hostinginside/waf/manager/crsplugins"
 	"hostinginside/waf/manager/store"
 )
 
@@ -34,7 +35,7 @@ func newOpsAPI(t *testing.T) (http.Handler, *fakeLoader, string) {
 	fl := &fakeLoader{}
 	a := New(st, fl, compile.Options{AdminListen: "127.0.0.1:2019", HTTPPort: 80, HTTPSPort: 443, EventLog: "events.log",
 		ChallengeSecret: base64.StdEncoding.EncodeToString(make([]byte, 32))}, []string{testKey})
-	a.SetOps(Ops{RulesetsDir: sets, Backups: &backup.Backups{Store: st, Dir: filepath.Join(dir, "backups")},
+	a.SetOps(Ops{RulesetsDir: sets, PluginsDir: "/data/crs-plugins", Backups: &backup.Backups{Store: st, Dir: filepath.Join(dir, "backups")},
 		Notifier: &alert.Notifier{Store: st, Host: "edge"}})
 	return a.Handler(), fl, sets
 }
@@ -103,4 +104,27 @@ func TestAlertSettings(t *testing.T) {
 	var v alertsView
 	decodeBody(t, rec, &v)
 	assert.Equal(t, "https://hooks.example.test/x", v.WebhookURL)
+}
+
+func TestAppProfiles(t *testing.T) {
+	h, fl, _ := newOpsAPI(t)
+	var apps []crsplugins.App
+	decodeBody(t, do(t, h, "GET", "/api/v1/apps", ""), &apps)
+	require.Len(t, apps, len(crsplugins.Catalog))
+	assert.Equal(t, "wordpress", apps[0].Key)
+
+	id := createSite(t, h, `{"domains":["blog.example.com"],"upstreams":["10.0.0.5:8080"],"waf":{"apps":["wordpress"]}}`)
+	b, _ := json.Marshal(fl.configs[len(fl.configs)-1])
+	assert.Contains(t, string(b), "Include /data/crs-plugins/wordpress/wordpress-rule-exclusions-before.conf")
+	var v siteView
+	decodeBody(t, do(t, h, "GET", "/api/v1/sites/"+id, ""), &v)
+	assert.Equal(t, []string{"wordpress"}, v.Resolved.WAF.Apps)
+	assert.Equal(t, http.StatusBadRequest, do(t, h, "PATCH", "/api/v1/sites/"+id, `{"waf":{"apps":["joomla"]}}`).Code)
+	assert.Equal(t, http.StatusBadRequest, do(t, h, "PATCH", "/api/v1/sites/"+id, `{"waf":{"apps":["wordpress","wordpress"]}}`).Code)
+
+	// a manager without a plugins directory offers none and refuses them
+	h2, _ := newTestAPI(t)
+	decodeBody(t, do(t, h2, "GET", "/api/v1/apps", ""), &apps)
+	assert.Empty(t, apps)
+	assert.Equal(t, http.StatusBadRequest, do(t, h2, "POST", "/api/v1/sites", `{"domains":["b.example.com"],"upstreams":["10.0.0.5:8080"],"waf":{"apps":["wordpress"]}}`).Code)
 }

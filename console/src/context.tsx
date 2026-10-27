@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api, errText } from './api'
-import type { Me, Protection, SiteView, SystemInfo } from './types'
+import type { AppProfile, Me, Protection, SiteView, SystemInfo } from './types'
 
 interface AppState {
   me: Me | null
@@ -10,6 +10,7 @@ interface AppState {
   siteById: Record<string, SiteView>
   reloadSites: () => Promise<void>
   protections: Protection[]
+  apps: AppProfile[]
   system: SystemInfo | null
   reloadSystem: () => void
   notify: (msg: string) => void
@@ -23,6 +24,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [sites, setSites] = useState<SiteView[]>([])
   const [sitesLoaded, setSitesLoaded] = useState(false)
   const [protections, setProtections] = useState<Protection[]>([])
+  const [apps, setApps] = useState<AppProfile[]>([])
   const [system, setSystem] = useState<SystemInfo | null>(null)
   const [toast, setToast] = useState<{ msg: string; error: boolean; key: number } | null>(null)
 
@@ -49,6 +51,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!me) return
     reloadSites()
     api.get<Protection[]>('/protections').then(setProtections).catch(notifyError)
+    api.get<AppProfile[]>('/apps').then(setApps).catch(() => {})
     reloadSystem()
     // the engine status in the top bar stays current
     const t = setInterval(reloadSystem, 30_000)
@@ -58,7 +61,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const siteById = useMemo(() => Object.fromEntries(sites.map((s) => [s.id, s])), [sites])
 
   return (
-    <Ctx.Provider value={{ me, setMe, sites, sitesLoaded, siteById, reloadSites, protections, system, reloadSystem, notify, notifyError }}>
+    <Ctx.Provider value={{ me, setMe, sites, sitesLoaded, siteById, reloadSites, protections, apps, system, reloadSystem, notify, notifyError }}>
       {children}
       {toast && (
         <div key={toast.key} className={'toast' + (toast.error ? ' error' : '')} role={toast.error ? 'alert' : 'status'}>

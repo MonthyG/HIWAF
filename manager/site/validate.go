@@ -11,6 +11,7 @@ import (
 
 	"hostinginside/waf/engine/access"
 	"hostinginside/waf/engine/ratelimit"
+	"hostinginside/waf/manager/crsplugins"
 )
 
 // ValidationError names the JSON path of the offending field.
@@ -120,6 +121,13 @@ func Validate(d Doc, geoEnabled bool) error {
 			if !knownProtection(k) {
 				return verr("waf.protections."+k, "unknown protection")
 			}
+		}
+		seen := map[string]bool{}
+		for i, k := range w.Apps {
+			if !crsplugins.Known(k) || seen[k] {
+				return verr(fmt.Sprintf("waf.apps[%d]", i), "must be one of %s, once each; got %q", strings.Join(crsplugins.Keys(), ", "), k)
+			}
+			seen[k] = true
 		}
 	}
 	if err := validateExclusions(d.Exclusions); err != nil {

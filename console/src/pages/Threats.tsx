@@ -5,12 +5,13 @@ import { useApp } from '../context'
 import type { Attack, AttackDetail, GroupRow, Page } from '../types'
 import { Btn, Empty, Pager, Pill, Segmented, useInterval } from '../ui'
 import { categoryLabel, categoryLabels, clock, countryName, span, siteName, when } from '../util'
+import { appHint } from './AppPicker'
 import ExclusionDialog, { fieldFrom, pathFrom } from './ExclusionDialog'
 
 type Range = '24h' | '7d' | '30d'
 
 export default function Threats() {
-  const { sites, siteById, notify, notifyError } = useApp()
+  const { sites, siteById, notify, notifyError, apps, reloadSites } = useApp()
   const [params, setParams] = useSearchParams()
   const site = params.get('site') ?? ''
   const category = params.get('category') ?? ''
@@ -61,6 +62,17 @@ export default function Threats() {
 
   const current = sources.items.find((g) => g.client_ip === sel.ip && (!sel.site || g.site_id === sel.site))
   const stopped = rows.items.filter((a) => a.blocked).length
+
+  const enableApp = async (siteId: string, key: string, label: string) => {
+    const s = siteById[siteId]
+    try {
+      await api.patch(`/sites/${siteId}`, { waf: { ...s.resolved.waf, apps: [...(s.resolved.waf.apps ?? []), key] } })
+      await reloadSites()
+      notify(`${label} profile is on for ${siteName(s)}`)
+    } catch (e) {
+      notifyError(e)
+    }
+  }
 
   const refuse = async (everywhere: boolean) => {
     if (!sel.ip) return
@@ -153,6 +165,16 @@ export default function Threats() {
                               <dt>Browser</dt><dd className="truncate">{detail.request?.user_agent || '—'}</dd>
                               <dt>Event</dt><dd className="code">{a.tx_id}</dd>
                             </dl>
+                            {(() => {
+                              const hint = appHint(siteById[a.site_id], a.uri, apps)
+                              const s = siteById[a.site_id]
+                              return hint && s && (
+                                <div className="notice" style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', margin: '8px 0' }}>
+                                  <span className="grow">This looks like {hint.label}’s own admin. If this site runs {hint.label}, its profile stops these false alarms on every admin page at once.</span>
+                                  <Btn small kind="primary" onClick={() => enableApp(s.id, hint.key, hint.label)}>Turn on {hint.label}</Btn>
+                                </div>
+                              )
+                            })()}
                             <div className="match-list">
                               {detail.matches.filter((m) => m.category !== 'score').map((m) => (
                                 <div key={m.id}>
