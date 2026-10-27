@@ -104,9 +104,12 @@ ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo
 say "HostingInside WAF is running"
 echo "  Console:  https://${ip:-<server-ip>}:$PORT  (self-signed certificate)"
-if [ -f "$DATA/initial-admin.txt" ]; then
+if [ -f "$DATA/initial-admin.txt" ] && ! $upgrade; then
   sed 's/^/  /' "$DATA/initial-admin.txt"
-  echo "  (also in $DATA/initial-admin.txt; delete it after changing the password)"
+  echo "  (also in $DATA/initial-admin.txt; it is deleted when you change the password)"
+elif [ -f "$DATA/initial-admin.txt" ]; then
+  echo "  The first admin password is still unchanged (see $DATA/initial-admin.txt)."
+  echo "  Change it in the console; the file is deleted when you do."
 else
   echo "  Existing install: sign in with your password, or reset it with"
   echo "    docker exec hiwaf-manager manager -config /data/manager.json -resetadmin"

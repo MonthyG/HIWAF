@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -150,6 +151,36 @@ func ResetAdmin(ctx context.Context, st *store.Store) (string, error) {
 		return "", err
 	}
 	return pw, st.DeleteUserSessions(ctx, defaultAdmin, "")
+}
+
+// SetAdminNote names the file that holds admin's first password, so the
+// console can delete it once that password is changed.
+func (a *API) SetAdminNote(path string) { a.note = path }
+
+// CleanAdminNote deletes the first-password file when the password in it no
+// longer signs in as admin (changed in the console or with -resetadmin), so
+// a stale password doesn't sit on disk. It reports whether it deleted it.
+func CleanAdminNote(ctx context.Context, st *store.Store, path string) (bool, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	var pw string
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(line, "Password: "); ok {
+			pw = strings.TrimSpace(v)
+		}
+	}
+	u, err := st.GetUser(ctx, defaultAdmin)
+	if err != nil && !errors.Is(err, store.ErrNoUser) {
+		return false, err
+	}
+	if err == nil && pw != "" && bcrypt.CompareHashAndPassword([]byte(u.Hash), []byte(pw)) == nil {
+		return false, nil
+	}
+	return true, os.Remove(path)
 }
 
 // --- login limiter -----------------------------------------------------------
@@ -351,6 +382,11 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 	if err := a.st.DeleteUserSessions(r.Context(), u.Username, principalOf(r).Session); err != nil {
 		a.writeErr(w, err)
 		return
+	}
+	if a.note != "" && u.Username == defaultAdmin {
+		if _, err := CleanAdminNote(r.Context(), a.st, a.note); err != nil {
+			a.log.Warn("could not delete the first-password file", "file", a.note, "err", err)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -325,13 +325,17 @@ func run(cfgPath string, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("challenge secret: %w", err)
 	}
+	note := filepath.Join(cfg.DataDir, "initial-admin.txt")
 	if pw, err := api.EnsureAdmin(ctx, st); err != nil {
 		return fmt.Errorf("console admin: %w", err)
 	} else if pw != "" {
-		note := filepath.Join(cfg.DataDir, "initial-admin.txt")
 		_ = os.WriteFile(note, []byte("Console user: admin\nPassword: "+pw+"\n"), 0o600)
 		log.Warn("created console user admin; change its password after the first login",
 			"password", pw, "also_written_to", note)
+	} else if gone, err := api.CleanAdminNote(ctx, st, note); err != nil {
+		log.Warn("could not check the first-password file", "file", note, "err", err)
+	} else if gone {
+		log.Info("deleted the first-password file: admin's password has changed", "file", note)
 	}
 	if cfg.StaticDir != "" {
 		if err := os.MkdirAll(cfg.StaticDir, 0o755); err != nil {
@@ -374,6 +378,7 @@ func run(cfgPath string, log *slog.Logger) error {
 			notifier.Notify("backup_failed", "the scheduled database backup failed: "+err.Error())
 		}}
 	a.SetOps(api.Ops{RulesetsDir: cfg.RulesetsDir, Backups: backups, Notifier: notifier, Watcher: watcher})
+	a.SetAdminNote(note)
 
 	syncCtx, cancel := context.WithTimeout(ctx, time.Minute)
 	if err := a.Sync(syncCtx); err != nil {

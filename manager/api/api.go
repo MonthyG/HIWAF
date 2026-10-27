@@ -58,6 +58,7 @@ type API struct {
 	limiter *loginLimiter
 	started time.Time
 	ops     Ops
+	note    string // initial-admin.txt, removed once admin's password changes
 }
 
 // New returns an API. Empty keys are ignored.

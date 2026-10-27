@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -206,4 +207,26 @@ func TestIPGroupsAndGlobalRulesCompile(t *testing.T) {
 	// A site can't reference a missing group.
 	rec = do(t, h, "POST", "/api/v1/sites", `{"domains":["b.example.com"],"upstreams":["10.0.0.5:80"],"access":{"block_groups":["g_000000000000"]}}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestCleanAdminNote(t *testing.T) {
+	ctx := context.Background()
+	_, _, st, pw := newConsoleAPI(t)
+	note := filepath.Join(t.TempDir(), "initial-admin.txt")
+	gone, err := CleanAdminNote(ctx, st, note)
+	require.NoError(t, err)
+	assert.False(t, gone, "no file, nothing to do")
+
+	require.NoError(t, os.WriteFile(note, []byte("Console user: admin\nPassword: "+pw+"\n"), 0o600))
+	gone, err = CleanAdminNote(ctx, st, note)
+	require.NoError(t, err)
+	assert.False(t, gone, "the password still works, so the file stays")
+	assert.FileExists(t, note)
+
+	_, err = ResetAdmin(ctx, st)
+	require.NoError(t, err)
+	gone, err = CleanAdminNote(ctx, st, note)
+	require.NoError(t, err)
+	assert.True(t, gone, "the password changed")
+	assert.NoFileExists(t, note)
 }
