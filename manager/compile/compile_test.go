@@ -56,6 +56,9 @@ func TestDirectivesDetectAndDisabled(t *testing.T) {
 	assert.Contains(t, d, "SecRuleRemoveById 950000-956999") // data_leak default off
 	assert.Contains(t, d, "SecResponseBodyAccess Off")
 	assert.Less(t, strings.Index(d, "id:900000"), strings.Index(d, "@owasp_crs/*.conf"))
+	assert.Contains(t, d, "tx.allowed_methods=GET HEAD POST OPTIONS PUT PATCH DELETE'")
+	assert.Contains(t, d, "|text/plain|")
+	assert.Less(t, strings.Index(d, "id:900220"), strings.Index(d, "@owasp_crs/*.conf"))
 	assert.Less(t, strings.Index(d, "@owasp_crs/*.conf"), strings.Index(d, "SecRuleRemoveById"))
 }
 

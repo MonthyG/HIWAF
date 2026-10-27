@@ -9,9 +9,22 @@ import (
 	"hostinginside/waf/manager/site"
 )
 
+// AllowedMethods widens CRS's GET HEAD POST OPTIONS so REST APIs work.
+const AllowedMethods = "GET HEAD POST OPTIONS PUT PATCH DELETE"
+
+// AllowedContentTypes is CRS's list plus text/plain (sendBeacon, analytics)
+// and the common +json types. Bodies with no parser of their own are parsed
+// as form data (tx.enforce_bodyproc_urlencoded) and +json as JSON, so the
+// attack rules still see what's in them.
+const AllowedContentTypes = "|application/x-www-form-urlencoded| |multipart/form-data| |multipart/related| " +
+	"|text/xml| |application/xml| |application/soap+xml| |application/json| |text/plain| " +
+	"|application/merge-patch+json| |application/json-patch+json| |application/vnd.api+json| " +
+	"|application/cloudevents+json| |application/cloudevents-batch+json|"
+
 // Directives returns the Coraza directives for s: the recommended config and
-// CRS setup, the site's paranoia and anomaly thresholds, the CRS rules, the
-// engine mode, and one SecRuleRemoveById per range of each disabled protection.
+// CRS setup, the site's paranoia and anomaly thresholds, the allowed methods
+// and content types, the CRS rules, the engine mode, and one
+// SecRuleRemoveById per range of each disabled protection.
 // The CRS files come from crsDir (an unpacked release, see the rulesets API)
 // or, when it is empty, from the copy built into the engine.
 func Directives(s site.Resolved, crsDir string) string {
@@ -28,6 +41,10 @@ func Directives(s site.Resolved, crsDir string) string {
 	line("Include %s", setup)
 	line(`SecAction "id:900000,phase:1,pass,nolog,setvar:tx.blocking_paranoia_level=%d"`, s.Paranoia)
 	line(`SecAction "id:900110,phase:1,pass,nolog,setvar:tx.inbound_anomaly_score_threshold=%d,setvar:tx.outbound_anomaly_score_threshold=4"`, s.AnomalyThreshold)
+	line(`SecAction "id:900010,phase:1,pass,nolog,setvar:tx.enforce_bodyproc_urlencoded=1"`)
+	line(`SecAction "id:900200,phase:1,pass,nolog,setvar:'tx.allowed_methods=%s'"`, AllowedMethods)
+	line(`SecAction "id:900220,phase:1,pass,nolog,setvar:'tx.allowed_request_content_type=%s'"`, AllowedContentTypes)
+	line(`SecRule REQUEST_HEADERS:Content-Type "@rx ^application/[a-z0-9.-]+\+json(?:\s*;|$)" "id:10010,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=JSON"`)
 	line("Include %s", rules)
 	if s.WAFMode == "detect" {
 		line("SecRuleEngine DetectionOnly")
