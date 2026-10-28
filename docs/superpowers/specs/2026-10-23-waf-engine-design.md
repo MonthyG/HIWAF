@@ -287,8 +287,15 @@ D:\Timothy\Coraza\
   go.mod requires 1.26.0). xcaddy isn't needed: the plan builds our own Caddy
   main. The user will say when to run.
 - **Memory per site**: each site gets its own Coraza WAF instance with CRS
-  loaded. Pattern memoization shares regexes across sites, but memory per
-  site must be measured before multi-tenant use.
+  loaded. Pattern memoization shares regexes across sites. Measured
+  2026-10-28 (CRS 4.30.0, one engine, 4 cores, no traffic), engine RSS:
+  idle 55 MB; the first site ~40 MB (loading CRS once); then about 1 MB
+  per site when sites share the same WAF settings (coraza-caddy reuses the
+  instance) and about 4 MB per site when every site's settings differ. So
+  100 distinct sites need ~0.5 GB, and an 8 GB node holds roughly 1,500.
+  A config reload rebuilds every site: 0.2 s at 100 sites, growing with the
+  site count, so a node should hold a bounded number of sites (shard across
+  engines) rather than every tenant.
 - **coraza-caddy error-string coupling** (§6). Fixable, pinned by a test.
 - **Response inspection (`data_leak`)** buffers bodies. Off by default.
 - **JS challenge** blocks non-browser API clients. It is per-site and off by
