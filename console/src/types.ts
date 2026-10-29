@@ -9,7 +9,7 @@ export interface Port { port: number; https: boolean }
 export type Mode = 'block' | 'detect' | 'off'
 
 export interface Resolved {
-  name: string; description: string; type: 'proxy' | 'static' | 'redirect'
+  name: string; description: string; project: string; type: 'proxy' | 'static' | 'redirect'
   domains: string[]; ports: Port[]; upstreams: string[] | null; lb_policy: string
   redirect: { url: string; code: number; preserve_path: boolean }
   advanced: { hsts: boolean; gzip: boolean; http_redirect: boolean; keep_host: boolean }
@@ -74,6 +74,6 @@ export interface Ruleset { version: string; name: string; active: boolean }
 export interface Rulesets { dir: string; items: Ruleset[] }
 export interface Backup { name: string; size: number; created: string }
 export interface Alerts { webhook_url: string; heartbeat_url: string; engine_down_since?: string }
-export interface Me { username: string; totp_enabled: boolean; kind: 'user' | 'token' }
-export interface Token { id: string; name: string; created: string; last_used?: string; token?: string }
+export interface Me { username: string; totp_enabled: boolean; kind: 'user' | 'token'; project?: string }
+export interface Token { id: string; name: string; project?: string; created: string; last_used?: string; token?: string }
 export type SiteCounts = Record<string, { requests: number; blocked: number; threats: number }>

@@ -138,6 +138,7 @@ func TestValidateErrorsNameField(t *testing.T) {
 		{"feed path dotdot", func(d *Doc) { d.Access = &AccessDoc{BlockIPsFile: "..feed"} }, true, "access.block_ips_file"},
 		{"feed path blank", func(d *Doc) { d.Access = &AccessDoc{BlockIPsFile: "  "} }, true, "access.block_ips_file"},
 		{"difficulty", func(d *Doc) { d.BotChallenge = &ChallengeDoc{Enabled: true, Difficulty: 7} }, true, "bot_challenge.difficulty"},
+		{"bad project", func(d *Doc) { d.Project = "alpha beta" }, true, "project"},
 		{"exclusion scoring rule", func(d *Doc) { d.Exclusions = []Exclusion{{RuleID: 949110}} }, true, "exclusions[0].rule_id"},
 		{"exclusion set-up rule", func(d *Doc) { d.Exclusions = []Exclusion{{RuleID: 901001}} }, true, "exclusions[0].rule_id"},
 		{"exclusion two paths", func(d *Doc) { d.Exclusions = []Exclusion{{RuleID: 942100, PathExact: "/a", PathPrefix: "/b"}} }, true, "exclusions[0]"},

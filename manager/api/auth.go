@@ -48,10 +48,13 @@ type ctxKey string
 
 var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("hiwaf-no-such-user"), bcrypt.DefaultCost)
 
-// principal is who is calling: a console user, or an API key/token.
+// principal is who is calling: a console user, or an API key/token. A
+// principal with a Project acts only for that project (see tenant.go).
 type principal struct {
 	User    string // console username; empty for keys and tokens
 	Session string // hash of the session ID, for session callers
+	Project string // the project it is limited to; empty = the operator, unlimited
+	Locked  bool   // the project comes from the token itself and can't be changed
 }
 
 func hashHex(s string) string {
@@ -81,8 +84,8 @@ func (a *API) authenticate(r *http.Request) (principal, bool) {
 			return principal{}, true
 		}
 		if strings.HasPrefix(tok, tokenPrefix) {
-			if _, ok, err := a.st.TokenByHash(r.Context(), hex.EncodeToString(sum[:])); err == nil && ok {
-				return principal{}, true
+			if t, ok, err := a.st.TokenByHash(r.Context(), hex.EncodeToString(sum[:])); err == nil && ok {
+				return principal{Project: t.Project, Locked: t.Project != ""}, true
 			}
 		}
 		return principal{}, false
@@ -112,6 +115,17 @@ func (a *API) auth(next http.Handler) http.Handler {
 			r.Header.Get(CSRFHeader) != csrfValue {
 			writeJSON(w, http.StatusForbidden, errBody{Error: "missing " + CSRFHeader + " header"})
 			return
+		}
+		if h := r.Header.Get(ProjectHeader); h != "" {
+			switch {
+			case !site.ValidProject(h):
+				writeJSON(w, http.StatusBadRequest, errBody{Error: ProjectHeader + " must be 1-64 letters, digits, - or _", Field: "project"})
+				return
+			case p.Locked && h != p.Project:
+				writeJSON(w, http.StatusForbidden, errBody{Error: "this token belongs to another project"})
+				return
+			}
+			p.Project = h
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey, p)))
 	})
@@ -256,7 +270,8 @@ type loginReq struct {
 type meView struct {
 	Username    string `json:"username"`
 	TOTPEnabled bool   `json:"totp_enabled"`
-	Kind        string `json:"kind"` // user | token
+	Kind        string `json:"kind"`              // user | token
+	Project     string `json:"project,omitempty"` // set when the caller acts for one project
 }
 
 func (a *API) login(w http.ResponseWriter, r *http.Request) {
@@ -324,7 +339,7 @@ func (a *API) logout(w http.ResponseWriter, r *http.Request) {
 func (a *API) me(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
 	if p.User == "" {
-		writeJSON(w, http.StatusOK, meView{Username: "api", Kind: "token"})
+		writeJSON(w, http.StatusOK, meView{Username: "api", Kind: "token", Project: p.Project})
 		return
 	}
 	u, err := a.st.GetUser(r.Context(), p.User)
@@ -332,7 +347,7 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, meView{Username: u.Username, TOTPEnabled: u.TOTPEnabled, Kind: "user"})
+	writeJSON(w, http.StatusOK, meView{Username: u.Username, TOTPEnabled: u.TOTPEnabled, Kind: "user", Project: p.Project})
 }
 
 // currentUser returns the calling console user, or a 403 for API keys.
@@ -478,6 +493,7 @@ func (a *API) totpDisable(w http.ResponseWriter, r *http.Request) {
 type tokenView struct {
 	ID       string     `json:"id"`
 	Name     string     `json:"name"`
+	Project  string     `json:"project,omitempty"` // the token acts only for this project
 	Created  time.Time  `json:"created"`
 	LastUsed *time.Time `json:"last_used,omitempty"`
 	Token    string     `json:"token,omitempty"` // only in the create response
@@ -491,7 +507,7 @@ func (a *API) listTokens(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]tokenView, 0, len(ts))
 	for _, t := range ts {
-		v := tokenView{ID: t.ID, Name: t.Name, Created: t.Created}
+		v := tokenView{ID: t.ID, Name: t.Name, Project: t.Project, Created: t.Created}
 		if !t.LastUsed.IsZero() {
 			lu := t.LastUsed
 			v.LastUsed = &lu
@@ -503,7 +519,8 @@ func (a *API) listTokens(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) createToken(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name string `json:"name"`
+		Name    string `json:"name"`
+		Project string `json:"project"` // empty = an operator token
 	}
 	if err := decode(w, r, &req); err != nil {
 		a.writeErr(w, err)
@@ -513,13 +530,17 @@ func (a *API) createToken(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, badRequest("name", "must be 1-64 characters"))
 		return
 	}
+	if req.Project != "" && !site.ValidProject(req.Project) {
+		a.writeErr(w, badRequest("project", "must be 1-64 letters, digits, - or _"))
+		return
+	}
 	secret := tokenPrefix + randomString(24)
 	id := site.NewObjectID("t")
-	if err := a.st.CreateToken(r.Context(), id, req.Name, hashHex(secret)); err != nil {
+	if err := a.st.CreateToken(r.Context(), id, req.Name, req.Project, hashHex(secret)); err != nil {
 		a.writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, tokenView{ID: id, Name: req.Name, Created: now(), Token: secret})
+	writeJSON(w, http.StatusCreated, tokenView{ID: id, Name: req.Name, Project: req.Project, Created: now(), Token: secret})
 }
 
 func (a *API) deleteToken(w http.ResponseWriter, r *http.Request) {

@@ -77,64 +77,65 @@ func New(st *store.Store, cl Loader, opt compile.Options, apiKeys []string) *API
 // requires an API key, an API token or a console session.
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
+	handle := func(pattern string, s scope, h http.HandlerFunc) { mux.HandleFunc(pattern, a.gate(s, h)) }
 	// Sites.
-	mux.HandleFunc("POST /api/v1/sites", a.createSite)
-	mux.HandleFunc("GET /api/v1/sites", a.listSites)
-	mux.HandleFunc("GET /api/v1/sites/{id}", a.getSite)
-	mux.HandleFunc("PUT /api/v1/sites/{id}", a.putSite)
-	mux.HandleFunc("PATCH /api/v1/sites/{id}", a.patchSite)
-	mux.HandleFunc("DELETE /api/v1/sites/{id}", a.deleteSite)
-	mux.HandleFunc("POST /api/v1/sites/{id}/exclusions", a.addExclusion)
-	mux.HandleFunc("POST /api/v1/sites/{id}/certificate", a.putCert)
-	mux.HandleFunc("POST /api/v1/sites/{id}/static", a.uploadStatic)
-	mux.HandleFunc("GET /api/v1/site-counts", a.siteCounts)
+	handle("POST /api/v1/sites", anyCaller, a.createSite)
+	handle("GET /api/v1/sites", anyCaller, a.listSites)
+	handle("GET /api/v1/sites/{id}", siteInPath, a.getSite)
+	handle("PUT /api/v1/sites/{id}", siteInPath, a.putSite)
+	handle("PATCH /api/v1/sites/{id}", siteInPath, a.patchSite)
+	handle("DELETE /api/v1/sites/{id}", siteInPath, a.deleteSite)
+	handle("POST /api/v1/sites/{id}/exclusions", siteInPath, a.addExclusion)
+	handle("POST /api/v1/sites/{id}/certificate", siteInPath, a.putCert)
+	handle("POST /api/v1/sites/{id}/static", siteInPath, a.uploadStatic)
+	handle("GET /api/v1/site-counts", adminOnly, a.siteCounts)
 	// Global objects.
-	mux.HandleFunc("GET /api/v1/certificates", a.listCerts)
-	mux.HandleFunc("POST /api/v1/certificates", a.createCert)
-	mux.HandleFunc("PUT /api/v1/certificates/{id}", a.updateCert)
-	mux.HandleFunc("DELETE /api/v1/certificates/{id}", a.deleteCert)
-	mux.HandleFunc("GET /api/v1/ip-groups", a.listGroups)
-	mux.HandleFunc("POST /api/v1/ip-groups", a.createGroup)
-	mux.HandleFunc("PUT /api/v1/ip-groups/{id}", a.updateGroup)
-	mux.HandleFunc("DELETE /api/v1/ip-groups/{id}", a.deleteGroup)
-	mux.HandleFunc("GET /api/v1/rules", a.listRules)
-	mux.HandleFunc("POST /api/v1/rules", a.createRule)
-	mux.HandleFunc("PUT /api/v1/rules/{id}", a.updateRule)
-	mux.HandleFunc("DELETE /api/v1/rules/{id}", a.deleteRule)
+	handle("GET /api/v1/certificates", adminOnly, a.listCerts)
+	handle("POST /api/v1/certificates", adminOnly, a.createCert)
+	handle("PUT /api/v1/certificates/{id}", adminOnly, a.updateCert)
+	handle("DELETE /api/v1/certificates/{id}", adminOnly, a.deleteCert)
+	handle("GET /api/v1/ip-groups", adminOnly, a.listGroups)
+	handle("POST /api/v1/ip-groups", adminOnly, a.createGroup)
+	handle("PUT /api/v1/ip-groups/{id}", adminOnly, a.updateGroup)
+	handle("DELETE /api/v1/ip-groups/{id}", adminOnly, a.deleteGroup)
+	handle("GET /api/v1/rules", adminOnly, a.listRules)
+	handle("POST /api/v1/rules", adminOnly, a.createRule)
+	handle("PUT /api/v1/rules/{id}", adminOnly, a.updateRule)
+	handle("DELETE /api/v1/rules/{id}", adminOnly, a.deleteRule)
 	// Logs and statistics.
-	mux.HandleFunc("GET /api/v1/events", a.events)
-	mux.HandleFunc("GET /api/v1/stats", a.stats)
-	mux.HandleFunc("GET /api/v1/stats/overview", a.overview)
-	mux.HandleFunc("GET /api/v1/attacks", a.attacks)
-	mux.HandleFunc("GET /api/v1/attacks/groups", a.attackGroups)
-	mux.HandleFunc("GET /api/v1/attacks/{tx}", a.attackDetail)
-	mux.HandleFunc("GET /api/v1/logs", a.logs)
-	mux.HandleFunc("GET /api/v1/logs/groups", a.logGroups)
-	mux.HandleFunc("GET /api/v1/bans", a.bans)
-	mux.HandleFunc("DELETE /api/v1/bans", a.unban)
-	mux.HandleFunc("GET /api/v1/waitroom", a.waitRooms)
-	mux.HandleFunc("GET /api/v1/protections", a.protections)
-	mux.HandleFunc("GET /api/v1/apps", a.apps)
-	mux.HandleFunc("GET /api/v1/system", a.system)
-	mux.HandleFunc("GET /api/v1/rulesets", a.listRulesets)
-	mux.HandleFunc("PUT /api/v1/rulesets/active", a.setRuleset)
-	mux.HandleFunc("GET /api/v1/backups", a.listBackups)
-	mux.HandleFunc("POST /api/v1/backups", a.createBackup)
-	mux.HandleFunc("GET /api/v1/backups/{name}", a.downloadBackup)
-	mux.HandleFunc("GET /api/v1/alerts", a.getAlerts)
-	mux.HandleFunc("PUT /api/v1/alerts", a.putAlerts)
-	mux.HandleFunc("POST /api/v1/alerts/test", a.testAlert)
+	handle("GET /api/v1/events", siteParam, a.events)
+	handle("GET /api/v1/stats", siteParam, a.stats)
+	handle("GET /api/v1/stats/overview", siteParam, a.overview)
+	handle("GET /api/v1/attacks", siteParam, a.attacks)
+	handle("GET /api/v1/attacks/groups", siteParam, a.attackGroups)
+	handle("GET /api/v1/attacks/{tx}", txInPath, a.attackDetail)
+	handle("GET /api/v1/logs", siteParam, a.logs)
+	handle("GET /api/v1/logs/groups", siteParam, a.logGroups)
+	handle("GET /api/v1/bans", siteParam, a.bans)
+	handle("DELETE /api/v1/bans", siteParam, a.unban)
+	handle("GET /api/v1/waitroom", adminOnly, a.waitRooms)
+	handle("GET /api/v1/protections", anyCaller, a.protections)
+	handle("GET /api/v1/apps", anyCaller, a.apps)
+	handle("GET /api/v1/system", adminOnly, a.system)
+	handle("GET /api/v1/rulesets", adminOnly, a.listRulesets)
+	handle("PUT /api/v1/rulesets/active", adminOnly, a.setRuleset)
+	handle("GET /api/v1/backups", adminOnly, a.listBackups)
+	handle("POST /api/v1/backups", adminOnly, a.createBackup)
+	handle("GET /api/v1/backups/{name}", adminOnly, a.downloadBackup)
+	handle("GET /api/v1/alerts", adminOnly, a.getAlerts)
+	handle("PUT /api/v1/alerts", adminOnly, a.putAlerts)
+	handle("POST /api/v1/alerts/test", adminOnly, a.testAlert)
 	// Console account.
-	mux.HandleFunc("POST /api/v1/auth/login", a.login)
-	mux.HandleFunc("POST /api/v1/auth/logout", a.logout)
-	mux.HandleFunc("GET /api/v1/auth/me", a.me)
-	mux.HandleFunc("POST /api/v1/auth/password", a.changePassword)
-	mux.HandleFunc("POST /api/v1/auth/totp/setup", a.totpSetup)
-	mux.HandleFunc("POST /api/v1/auth/totp/enable", a.totpEnable)
-	mux.HandleFunc("POST /api/v1/auth/totp/disable", a.totpDisable)
-	mux.HandleFunc("GET /api/v1/tokens", a.listTokens)
-	mux.HandleFunc("POST /api/v1/tokens", a.createToken)
-	mux.HandleFunc("DELETE /api/v1/tokens/{id}", a.deleteToken)
+	handle("POST /api/v1/auth/login", anyCaller, a.login)
+	handle("POST /api/v1/auth/logout", adminOnly, a.logout)
+	handle("GET /api/v1/auth/me", anyCaller, a.me)
+	handle("POST /api/v1/auth/password", adminOnly, a.changePassword)
+	handle("POST /api/v1/auth/totp/setup", adminOnly, a.totpSetup)
+	handle("POST /api/v1/auth/totp/enable", adminOnly, a.totpEnable)
+	handle("POST /api/v1/auth/totp/disable", adminOnly, a.totpDisable)
+	handle("GET /api/v1/tokens", adminOnly, a.listTokens)
+	handle("POST /api/v1/tokens", adminOnly, a.createToken)
+	handle("DELETE /api/v1/tokens/{id}", adminOnly, a.deleteToken)
 	return a.auth(mux)
 }
 
@@ -397,6 +398,7 @@ type authUserView struct {
 type resolvedView struct {
 	Name        string     `json:"name"`
 	Description string     `json:"description"`
+	Project     string     `json:"project"`
 	Type        string     `json:"type"`
 	Domains     []string   `json:"domains"`
 	Ports       []portView `json:"ports"`
@@ -478,6 +480,7 @@ func (a *API) view(rec store.SiteRecord) siteView {
 	r := site.Resolve(rec.ID, rec.Doc)
 	var v resolvedView
 	v.Name, v.Description, v.Type, v.Domains, v.Upstreams = r.Name, r.Description, r.Type, r.Domains, r.Upstreams
+	v.Project = rec.Doc.Project
 	for _, p := range compilePorts(r, a.opt) {
 		v.Ports = append(v.Ports, portView{Port: p.Port, HTTPS: p.HTTPS})
 	}
@@ -565,6 +568,11 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, err)
 		return
 	}
+	p := principalOf(r)
+	if err := tenantDoc(p, &d); err != nil {
+		a.writeErr(w, err)
+		return
+	}
 	if err := site.Validate(d, a.opt.GeoIPDB != ""); err != nil {
 		a.writeErr(w, err)
 		return
@@ -579,7 +587,7 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 		return tx.PutSite(rec)
 	})
 	if err != nil {
-		a.writeErr(w, err)
+		a.writeErr(w, hideOthers(p, err))
 		return
 	}
 	writeJSON(w, http.StatusCreated, a.view(rec))
@@ -591,9 +599,12 @@ func (a *API) listSites(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, err)
 		return
 	}
+	project := principalOf(r).Project
 	out := make([]siteView, 0, len(recs))
 	for _, rec := range recs {
-		out = append(out, a.view(rec))
+		if project == "" || rec.Doc.Project == project {
+			out = append(out, a.view(rec))
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -634,6 +645,9 @@ func (a *API) replaceSite(w http.ResponseWriter, r *http.Request, merge func(sto
 		if err != nil {
 			return err
 		}
+		if err := tenantDoc(principalOf(r), &d); err != nil {
+			return err
+		}
 		prev := got.Doc
 		if err := a.prepareDoc(&d, &prev); err != nil {
 			return err
@@ -643,7 +657,7 @@ func (a *API) replaceSite(w http.ResponseWriter, r *http.Request, merge func(sto
 		return tx.PutSite(rec)
 	})
 	if err != nil {
-		a.writeErr(w, err)
+		a.writeErr(w, hideOthers(principalOf(r), err))
 		return
 	}
 	writeJSON(w, http.StatusOK, a.view(rec))

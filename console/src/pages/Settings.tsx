@@ -165,6 +165,7 @@ function Tokens() {
   const { notify, notifyError } = useApp()
   const [tokens, setTokens] = useState<Token[]>([])
   const [name, setName] = useState('')
+  const [project, setProject] = useState('')
   const [made, setMade] = useState<Token | null>(null)
   const [del, setDel] = useState<Token | null>(null)
   const load = useCallback(() => api.get<Token[]>('/tokens').then(setTokens).catch(notifyError), [notifyError])
@@ -173,12 +174,13 @@ function Tokens() {
     <>
       <form className="toolbar" onSubmit={async (e) => {
         e.preventDefault()
-        try { setMade(await api.post<Token>('/tokens', { name })); setName(''); load() } catch (er) { notifyError(er) }
+        try { setMade(await api.post<Token>('/tokens', { name, project: project.trim() })); setName(''); setProject(''); load() } catch (er) { notifyError(er) }
       }}>
         <input aria-label="Token name" className="input compact" style={{ width: 280 }} placeholder="What will use it, e.g. billing-sync" value={name} onChange={(e) => setName(e.target.value)} />
+        <input aria-label="Project (optional)" className="input compact code" style={{ width: 200 }} placeholder="Project ID (optional)" value={project} onChange={(e) => setProject(e.target.value)} />
         <button type="submit" className="btn primary" disabled={!name.trim()}>Create token</button>
         <span className="spacer" />
-        <span className="muted">Send it as <span className="code">Authorization: Bearer …</span>. A token can do anything you can.</span>
+        <span className="muted">Send it as <span className="code">Authorization: Bearer …</span>. Without a project it can do anything you can; with one, only that project’s sites.</span>
       </form>
       {made && (
         <p className="notice" style={{ marginBottom: 16 }}>
@@ -188,11 +190,12 @@ function Tokens() {
       )}
       <section className="panel flush">
         <table className="responsive">
-          <thead><tr><th>Token</th><th className="n">Created</th><th className="n">Last used</th><th /></tr></thead>
+          <thead><tr><th>Token</th><th>Project</th><th className="n">Created</th><th className="n">Last used</th><th /></tr></thead>
           <tbody>
             {tokens.map((t) => (
               <tr key={t.id}>
                 <td className="ident">{t.name}</td>
+                <td>{t.project ? <span className="code">{t.project}</span> : <span className="muted">Every site</span>}</td>
                 <td className="n num">{dateTime(t.created).slice(0, 10)}</td>
                 <td className="n num">{t.last_used ? when(t.last_used) : <span className="muted">Never</span>}</td>
                 <td className="n"><Btn small kind="danger" onClick={() => setDel(t)}>Revoke</Btn></td>

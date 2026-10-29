@@ -107,11 +107,14 @@ var eventColumns = []struct{ name, def string }{
 	{"country", "TEXT NOT NULL DEFAULT ''"},
 }
 
-func migrate(db *sql.DB) error {
-	if _, err := db.Exec(schema); err != nil {
-		return err
-	}
-	rows, err := db.Query(`PRAGMA table_info(events)`)
+// tokenColumns are columns added to tokens after the first release.
+var tokenColumns = []struct{ name, def string }{
+	{"project", "TEXT NOT NULL DEFAULT ''"},
+}
+
+// addColumns adds the columns of table that are missing.
+func addColumns(db *sql.DB, table string, cols []struct{ name, def string }) error {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
 		return err
 	}
@@ -127,14 +130,27 @@ func migrate(db *sql.DB) error {
 		have[name] = true
 	}
 	rows.Close()
-	for _, c := range eventColumns {
+	for _, c := range cols {
 		if !have[c.name] {
-			if _, err := db.Exec(`ALTER TABLE events ADD COLUMN ` + c.name + ` ` + c.def); err != nil {
+			if _, err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + c.name + ` ` + c.def); err != nil {
 				return err
 			}
 		}
 	}
-	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS events_tx ON events(tx_id) WHERE tx_id <> '';
+	return nil
+}
+
+func migrate(db *sql.DB) error {
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	if err := addColumns(db, "events", eventColumns); err != nil {
+		return err
+	}
+	if err := addColumns(db, "tokens", tokenColumns); err != nil {
+		return err
+	}
+	_, err := db.Exec(`CREATE INDEX IF NOT EXISTS events_tx ON events(tx_id) WHERE tx_id <> '';
 		CREATE INDEX IF NOT EXISTS events_type_ts ON events(type, ts)`)
 	return err
 }

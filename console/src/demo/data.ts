@@ -16,7 +16,7 @@ export const at = (msAgo: number) => new Date(NOW.getTime() - msAgo).toISOString
 // ---------- sites ----------
 
 const base = (over: Partial<Resolved>): Resolved => ({
-  name: '', description: '', type: 'proxy', domains: [], ports: [{ port: 80, https: false }, { port: 443, https: true }],
+  name: '', description: '', project: '', type: 'proxy', domains: [], ports: [{ port: 80, https: false }, { port: 443, https: true }],
   upstreams: [], lb_policy: 'round_robin', redirect: { url: '', code: 302, preserve_path: false },
   advanced: { hsts: false, gzip: true, http_redirect: true, keep_host: true }, tls: { mode: 'auto', cert_id: '' },
   waf: { mode: 'block', paranoia: 1, anomaly_threshold: 5, protections: {
@@ -61,7 +61,7 @@ export const sites: SiteView[] = [
   })),
   site(S.wiki, 3, base({
     name: 'Matsu Dev Wiki', description: 'Internal wiki for the Matsu island developers. New: in Watch while rules are tuned.',
-    domains: ['wiki.matsu-dev.tw'], upstreams: ['10.20.2.8:3000'],
+    domains: ['wiki.matsu-dev.tw'], upstreams: ['10.20.2.8:3000'], project: '7c2e9f41a0b84d6e9f3a2c1b5d8e0f47',
     waf: { mode: 'detect', paranoia: 2, anomaly_threshold: 5, protections: {
       sqli: true, xss: true, rce: true, lfi: true, rfi: true, php: true, nodejs: true, java: true, session_fixation: true,
       scanner: true, protocol: true, data_leak: false } },

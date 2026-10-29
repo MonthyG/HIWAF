@@ -31,6 +31,9 @@ func Validate(d Doc, geoEnabled bool) error {
 	if utf8.RuneCountInString(d.Description) > 500 {
 		return verr("description", "must be at most 500 characters")
 	}
+	if d.Project != "" && !ValidProject(d.Project) {
+		return verr("project", "must be 1-64 letters, digits, - or _")
+	}
 	tlsOff := d.TLS != nil && d.TLS.Mode == "off"
 	if len(d.Domains) == 0 {
 		return verr("domains", "at least one domain is required")

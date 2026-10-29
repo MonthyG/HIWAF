@@ -92,36 +92,37 @@ func (s *Store) DeleteUserSessions(ctx context.Context, user, keep string) error
 	return err
 }
 
-// Token is an API token; the secret itself is never stored.
+// Token is an API token; the secret itself is never stored. A token with a
+// Project acts only for that project.
 type Token struct {
-	ID, Name          string
+	ID, Name, Project string
 	Created, LastUsed time.Time
 }
 
 // CreateToken stores a token by the hash of its secret.
-func (s *Store) CreateToken(ctx context.Context, id, name, hash string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tokens(id, name, hash, created) VALUES(?, ?, ?, ?)`,
-		id, name, hash, time.Now().UnixMilli())
+func (s *Store) CreateToken(ctx context.Context, id, name, project, hash string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO tokens(id, name, project, hash, created) VALUES(?, ?, ?, ?, ?)`,
+		id, name, project, hash, time.Now().UnixMilli())
 	return err
 }
 
-// TokenByHash returns the ID of the token with the given hash and records its use.
-func (s *Store) TokenByHash(ctx context.Context, hash string) (string, bool, error) {
-	var id string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM tokens WHERE hash = ?`, hash).Scan(&id)
+// TokenByHash returns the token with the given hash and records its use.
+func (s *Store) TokenByHash(ctx context.Context, hash string) (Token, bool, error) {
+	var t Token
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, project FROM tokens WHERE hash = ?`, hash).Scan(&t.ID, &t.Name, &t.Project)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
+		return Token{}, false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return Token{}, false, err
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE tokens SET last_used = ? WHERE id = ?`, time.Now().UnixMilli(), id)
-	return id, true, err
+	_, err = s.db.ExecContext(ctx, `UPDATE tokens SET last_used = ? WHERE id = ?`, time.Now().UnixMilli(), t.ID)
+	return t, true, err
 }
 
 // ListTokens returns all tokens, newest first.
 func (s *Store) ListTokens(ctx context.Context) ([]Token, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, created, last_used FROM tokens ORDER BY created DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, project, created, last_used FROM tokens ORDER BY created DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +131,7 @@ func (s *Store) ListTokens(ctx context.Context) ([]Token, error) {
 	for rows.Next() {
 		var t Token
 		var c, l int64
-		if err := rows.Scan(&t.ID, &t.Name, &c, &l); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Project, &c, &l); err != nil {
 			return nil, err
 		}
 		t.Created = time.UnixMilli(c).UTC()

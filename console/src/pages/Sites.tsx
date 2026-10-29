@@ -41,7 +41,7 @@ export default function Sites() {
     const t = q.trim().toLowerCase()
     return sites
       .filter((s) => filter === 'all' || s.resolved.waf.mode === filter)
-      .filter((s) => !t || siteName(s).toLowerCase().includes(t) || s.resolved.domains.some((d) => d.includes(t)) || originWords(s).includes(t))
+      .filter((s) => !t || siteName(s).toLowerCase().includes(t) || s.resolved.domains.some((d) => d.includes(t)) || originWords(s).includes(t) || s.resolved.project.toLowerCase().includes(t))
       .sort((a, b) => (counts[b.id]?.requests ?? 0) - (counts[a.id]?.requests ?? 0))
   }, [sites, filter, q, counts])
 
@@ -64,7 +64,7 @@ export default function Sites() {
         <label className="search">
           <Icon name="search" />
           <span className="visually-hidden">Search sites</span>
-          <input className="input compact" placeholder="Domain, name or origin" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="input compact" placeholder="Domain, name, origin or project" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
         <span className="spacer" />
         <span className="stamp num">{shown.length} {shown.length === 1 ? 'site' : 'sites'}</span>
@@ -83,7 +83,7 @@ export default function Sites() {
                 <tr key={s.id} className="clickable" onClick={() => navigate(`/sites/${s.id}`)}>
                   <td style={{ width: '30%' }}>
                     <a className="ident" href={`#/sites/${s.id}`} onClick={(e) => { e.preventDefault(); navigate(`/sites/${s.id}`) }}>{siteName(s)}</a>
-                    <span className="sub truncate">{s.resolved.domains.map((d) => (d === '*' ? 'any host' : d)).join(', ')}</span>
+                    <span className="sub truncate">{s.resolved.domains.map((d) => (d === '*' ? 'any host' : d)).join(', ')}{s.resolved.project ? <> · project <span className="code">{s.resolved.project}</span></> : ''}</span>
                   </td>
                   <td><ModePill mode={s.resolved.waf.mode} /></td>
                   <td className="secondary hide-phone"><span className="truncate" style={{ display: 'block', maxWidth: 260 }}>{originWords(s)}</span></td>
