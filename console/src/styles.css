@@ -36,10 +36,10 @@
   --chart-1: #f2f2f3; --chart-2: #e5566f; --chart-3: #4a8ad6; --chart-4: #8a8c92; --chart-muted: #3a3a3e;
   --chart-mark: var(--text); --chart-span: 0.12; --chart-track: #2a292d;
   --grid: #26252a; --axis-ink: var(--muted); --ink: var(--text);
-  --shadow: 0 12px 28px rgba(0, 0, 0, .2); /* taste-skill-ignore: the dealt dark style lifts its cards with this one shadow and no border */
+  --shadow: 0 12px 28px rgba(0, 0, 0, .2); /* the dealt dark style lifts its cards with this one shadow and no border */
 
   --font: "Public Sans", Inter, system-ui, sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace; /* taste-skill-ignore: the combined console sets every figure in mono, by request */
+  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace; /* the combined console sets every figure in mono, by request */
   --fs-title: 26px; --fs-section: 20px; --fs-card: 16px; --fs-kpi: 20px; --fs-lead: 30px; --fs-body: 13px; --fs-small: 13px; --fs-pill: 12px;
   --pad: 32px; --gap: 24px; --card-pad: 20px;
   --radius-card: 0; --radius-control: 3px; --radius-chip: 3px;
@@ -57,7 +57,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 a { color: inherit; text-decoration: none; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 .num, table, .kpi-value, .figure { font-variant-numeric: tabular-nums; }
-.num, .kpi-value, .figure, .cp-value, .code, .m { font-family: var(--mono); letter-spacing: -0.01em; } /* taste-skill-ignore: figures in mono, by request */
+.num, .kpi-value, .figure, .cp-value, .code, .m { font-family: var(--mono); letter-spacing: -0.01em; } /* figures in mono, by request */
 .muted { color: var(--muted); }
 .code { font-size: 12.5px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -275,7 +275,7 @@ textarea.input { height: auto; min-height: 96px; padding: 8px 12px; line-height:
 .error-line { color: var(--negative); font-size: var(--fs-small); }
 
 /* ---------- dialog ---------- */
-dialog { border: 0; padding: 0; border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: 0 24px 64px rgba(0, 0, 0, .55); /* taste-skill-ignore: a dialog floats */ width: min(560px, calc(100vw - 32px)); max-height: calc(100svh - 48px); }
+dialog { border: 0; padding: 0; border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: 0 24px 64px rgba(0, 0, 0, .55); /* a dialog floats */ width: min(560px, calc(100vw - 32px)); max-height: calc(100svh - 48px); }
 dialog.wide { width: min(760px, calc(100vw - 32px)); }
 dialog::backdrop { background: rgba(0, 0, 0, .6); }
 .dialog-head { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px 0; }
@@ -284,7 +284,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .6); }
 .dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 0 24px 20px; }
 
 /* ---------- toast ---------- */
-.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50; padding: 10px 16px; border-radius: 6px; background: var(--raised); color: var(--text); box-shadow: var(--shadow); /* taste-skill-ignore: a toast floats */ max-width: min(560px, calc(100vw - 32px)); }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50; padding: 10px 16px; border-radius: 6px; background: var(--raised); color: var(--text); box-shadow: var(--shadow); /* a toast floats */ max-width: min(560px, calc(100vw - 32px)); }
 .toast.error { color: var(--pill-negative-ink); background: var(--pill-negative-bg); }
 
 /* ---------- settings rows: label column beside a panel ---------- */
