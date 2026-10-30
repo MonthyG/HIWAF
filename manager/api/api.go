@@ -931,9 +931,12 @@ func (a *API) unban(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, badRequest("site", "is required"))
 		return
 	}
+	// The engine lists an IPv6 ban as its /64, so that form is accepted too.
 	if _, err := netip.ParseAddr(ip); err != nil {
-		a.writeErr(w, badRequest("ip", "must be an IP address"))
-		return
+		if p, perr := netip.ParsePrefix(ip); perr != nil || !p.Addr().Is6() || p.Bits() != 64 {
+			a.writeErr(w, badRequest("ip", "must be an IP address or an IPv6 /64"))
+			return
+		}
 	}
 	ok, err := a.cl.Unban(r.Context(), siteID, ip)
 	if err != nil {

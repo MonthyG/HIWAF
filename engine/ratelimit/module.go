@@ -89,7 +89,7 @@ func (rl *RateLimit) Cleanup() error {
 // ServeHTTP enforces bans, counts the request and then counts the outcome of
 // the rest of the chain. next's error is always returned unchanged.
 func (rl *RateLimit) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	ip := clientip.Get(r)
+	ip := Key(clientip.Get(r))
 	now := time.Now()
 
 	// Already banned: no event, to avoid a log line per blocked request.

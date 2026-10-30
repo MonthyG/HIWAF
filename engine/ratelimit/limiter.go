@@ -35,6 +35,12 @@ type window struct {
 	prev   int
 }
 
+// maxWindows caps the counters one State keeps, so a flood from many
+// distinct sources can't grow memory without bound between sweeps. At the
+// cap, Record drops idle counters and then, if still full, an arbitrary
+// tenth of the rest; bans are kept.
+const maxWindows = 100_000
+
 // State holds bans and counters. It is safe for concurrent use.
 type State struct {
 	mu      sync.Mutex
@@ -80,6 +86,9 @@ func (s *State) Record(k Kind, ip string, lim Limit, now time.Time) (until time.
 	key := windowKey{k, ip}
 	w := s.windows[key]
 	if w == nil {
+		if len(s.windows) >= maxWindows {
+			s.evictLocked(now.Unix())
+		}
 		w = &window{start: ws, lenSec: wl}
 		s.windows[key] = w
 	}
@@ -145,10 +154,32 @@ func (s *State) Sweep(now time.Time) {
 			delete(s.bans, ip)
 		}
 	}
-	n := now.Unix()
+	s.dropIdleLocked(now.Unix())
+}
+
+// dropIdleLocked drops windows idle for more than two window lengths.
+func (s *State) dropIdleLocked(n int64) {
 	for key, w := range s.windows {
 		if n-w.start > 2*w.lenSec {
 			delete(s.windows, key)
 		}
+	}
+}
+
+// evictLocked makes room below maxWindows: idle windows first, then an
+// arbitrary tenth (Go's map order is unspecified, so this isn't predictable
+// by a client).
+func (s *State) evictLocked(n int64) {
+	s.dropIdleLocked(n)
+	if len(s.windows) < maxWindows {
+		return
+	}
+	drop := maxWindows / 10
+	for key := range s.windows {
+		if drop == 0 {
+			break
+		}
+		delete(s.windows, key)
+		drop--
 	}
 }

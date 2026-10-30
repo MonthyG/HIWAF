@@ -18,16 +18,15 @@ OWASP Core Rule Set. It has two binaries:
   Caddy JSON config, pushes it to the engine's admin API, and reads the
   engine's security events and access log for the statistics and logs.
 
-The console mirrors SafeLine's menus:
+The console's pages:
 
-- **Statistics**
-- **Applications**
-- **Attacks**
-- **Allow & Deny**
-- **HTTP Flood**: Rate Limiting and Waiting Room
-- **Anti-Bot**
-- **Auth**
-- **Settings**: certificates, IP groups, account with TOTP 2FA, API tokens
+- **Overview**: the request pipeline and what each stage stopped
+- **Threats**: WAF detections
+- **Activity**: access, rate-limit, challenge and password-gate events
+- **Sites**: each site's protections, in engine order (access rules, rate
+  limits, password gate, queue, bot check, threat inspection)
+- **Access**: allow and deny rules, IP groups and bans
+- **Settings**: certificates, account with TOTP 2FA, API tokens, system
 
 Detection is the OWASP Core Rule Set, not SafeLine's closed-source semantic
 engine. See `docs/superpowers/specs/2026-10-25-safeline-parity-design.md`.
@@ -70,8 +69,9 @@ Logs: `docker compose logs -f manager` and `docker compose logs -f engine`.
 
 - **Go 1.26 or later.** coraza-caddy's `go.mod` requires 1.26.0. You don't
   need xcaddy, because `cmd/hi-waf` is our own Caddy main.
-- **For geo blocking only:** a MaxMind `GeoLite2-Country.mmdb`. Set its path
-  in `geoip_db` in the manager config. If you leave it empty, any site that
+- **For geo blocking only:** a country database in MaxMind `.mmdb` format,
+  such as DB-IP Country Lite (what `install.sh` downloads) or MaxMind
+  `GeoLite2-Country.mmdb`. Set its path in `geoip_db` in the manager config. If you leave it empty, any site that
   uses `allow_countries`, `block_countries` or a `country` rule match is
   rejected.
 
@@ -360,6 +360,13 @@ account in 15 minutes. Turn on two-step sign-in, and if you can, allow
 - **Memory per site.** Each site gets its own Coraza instance with the full
   CRS loaded. Measure memory per site before you put many tenants on one
   node.
+- **IPv6 limits apply per /64.** Rate limits and bans count an IPv6 client
+  by its /64, because one client usually holds a whole /64 and could
+  otherwise use a fresh address per request. An IPv6 ban is listed as its
+  /64 and can be lifted with that prefix or any address in it. Clients that
+  share a /64 share their limits.
+- **Counters are capped per site.** At 100,000 tracked sources a site drops
+  idle counters, then an arbitrary tenth of the rest. Bans are kept.
 - **Single node, in-memory state.** Rate-limit counters and bans live in the
   engine process. They survive config reloads but not a restart, and they
   aren't shared between nodes.

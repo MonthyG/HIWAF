@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/netip"
 	"sort"
 	"time"
 
@@ -15,6 +14,9 @@ import (
 //
 //	GET    /hi/bans[?site=ID]   → {"<siteID>":[{"ip":"…","until":"RFC3339"}]}
 //	DELETE /hi/bans?site=&ip=   → 204, or 404 if the ip is not banned
+//
+// An IPv6 ban is listed as its /64 ("2001:db8::/64"); DELETE takes that
+// prefix or any address inside it.
 type BanAdmin struct{}
 
 // CaddyModule returns the Caddy module information.
@@ -79,9 +81,7 @@ func deleteBan(w http.ResponseWriter, r *http.Request) error {
 	if site == "" || ip == "" {
 		return caddy.APIError{HTTPStatus: http.StatusBadRequest, Err: errors.New("site and ip are required")}
 	}
-	if a, err := netip.ParseAddr(ip); err == nil {
-		ip = a.Unmap().String() // match clientip.Get's canonical form
-	}
+	ip = adminKey(ip) // an IPv6 ban covers the whole /64
 	st, ok := lookup(site)
 	if ok {
 		_, ok = st.BannedUntil(ip, time.Now())
