@@ -176,7 +176,7 @@ function Traffic({ site, ov, recent }: { site: SiteView; ov: Overview | null; re
           if (!ov) return
           window.Charts.line(el, { labels: ov.series.map((p) => clock(p.t)), height: 200, series: [
             { name: 'Requests', values: ov.series.map((p) => p.requests) },
-            { name: 'Stopped', values: ov.series.map((p) => p.blocked), colour: '#4a8ad6' },
+            { name: 'Stopped', values: ov.series.map((p) => p.blocked) },
           ] })
         }} />
       </section>

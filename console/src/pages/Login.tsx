@@ -38,7 +38,7 @@ export default function Login() {
   return (
     <div className="login">
       <div className="side">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><Mark size={30} /><span style={{ fontWeight: 600 }}>HostingInside WAF</span></div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><Mark size={30} /><span style={{ fontWeight: 600 }}>WAF</span></div>
         <p className="big">Every request to your customers' sites passes this edge first.</p>
         <p className="muted">鷹式特網 · HostingInside LTD</p>
       </div>

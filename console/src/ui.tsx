@@ -19,6 +19,8 @@ const paths: Record<string, ReactNode> = {
   trash: <><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></>,
   edit: <><path d="M12 20h9M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z" /></>,
   upload: <><path d="M12 15V3M7 8l5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" /></>,
+  sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>,
+  moon: <><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></>,
 }
 
 export function Icon({ name, title }: { name: keyof typeof paths | string; title?: string }) {
@@ -30,13 +32,13 @@ export function Icon({ name, title }: { name: keyof typeof paths | string; title
   )
 }
 
-/** The mark: an eagle's head in profile, for 鷹式特網 (HostingInside, "eagle-style network"). */
+/** The mark: the Hosting Inside logo (public/logo.png, the same file as the admin panel's apple-touch.png). */
 export function Mark({ size = 26 }: { size?: number }) {
+  const w = Math.round(size * 1.5 * 2.61) // logo.png is a 180px square; the artwork is the band y 54-123, about 2.61:1
   return (
-    <svg width={size} height={size} viewBox="0 0 32 32" aria-label="HostingInside WAF" role="img">
-      <path d="M5 23c2.5-9 8.6-15 17.4-15.6 2.4-.2 4.3.9 4.6 2.6.2 1.3-.6 2.3-2 2.8L22 14l2.6 3.3c.5.7-.2 1.6-1 1.3L19 17c-3.3 1.2-6.5 3.4-9.4 6.6z" fill="#4a8ad6" />
-      <circle cx="21.2" cy="11.4" r="1.25" fill="#171719" />
-    </svg>
+    <span role="img" aria-label="Hosting Inside" style={{ display: 'block', width: w, height: Math.round(size * 1.5), overflow: 'hidden', flex: 'none' }}>
+      <img src={import.meta.env.BASE_URL + 'logo.png'} alt="" width={w} height={w} style={{ marginTop: Math.round(-0.3 * w), maxWidth: 'none' }} />
+    </span>
   )
 }
 
@@ -60,6 +62,19 @@ export function IconBtn({ icon, label, ...rest }: React.ButtonHTMLAttributes<HTM
       <Icon name={icon} />
     </button>
   )
+}
+
+/** Light/dark switch. The choice is kept in localStorage; with none saved, main.tsx follows the system setting. */
+export function ThemeToggle() {
+  const [dark, setDark] = useState(() => document.documentElement.dataset.theme === 'dark')
+  const flip = () => {
+    const next = dark ? 'light' : 'dark'
+    document.documentElement.dataset.theme = next
+    try { localStorage.setItem('theme', next) } catch { /* private window: the choice lasts this visit */ }
+    setDark(!dark)
+    window.dispatchEvent(new Event('themechange'))
+  }
+  return <IconBtn icon={dark ? 'sun' : 'moon'} label={dark ? 'Light mode' : 'Dark mode'} onClick={flip} />
 }
 
 export function Field({ label, hint, error, children, id }: { label: string; hint?: ReactNode; error?: string; children: ReactNode; id?: string }) {

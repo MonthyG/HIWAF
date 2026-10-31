@@ -86,8 +86,8 @@ export function Radar({ sources, watchSites, now = new Date() }: { sources: Grou
           </g>
         ))}
         <g transform="translate(86 86) scale(0.875)">
-          <path d="M5 23c2.5-9 8.6-15 17.4-15.6 2.4-.2 4.3.9 4.6 2.6.2 1.3-.6 2.3-2 2.8L22 14l2.6 3.3c.5.7-.2 1.6-1 1.3L19 17c-3.3 1.2-6.5 3.4-9.4 6.6z" fill="#4a8ad6" />
-          <circle cx="21.2" cy="11.4" r="1.25" fill="#131217" />
+          <path d="M5 23c2.5-9 8.6-15 17.4-15.6 2.4-.2 4.3.9 4.6 2.6.2 1.3-.6 2.3-2 2.8L22 14l2.6 3.3c.5.7-.2 1.6-1 1.3L19 17c-3.3 1.2-6.5 3.4-9.4 6.6z" fill="#0069a8" />
+          <circle cx="21.2" cy="11.4" r="1.25" fill="#ffffff" />
         </g>
       </svg>
       <figcaption className="muted">Centre is now, the rim 24 hours ago. Red was stopped, amber let through in Watch.</figcaption>

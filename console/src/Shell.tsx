@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { api, DEMO } from './api'
 import { useApp } from './context'
 import type { SiteCounts } from './types'
-import { Btn, Icon, IconBtn, Mark } from './ui'
+import { Btn, Icon, IconBtn, Mark, ThemeToggle } from './ui'
 import { int, siteName } from './util'
 
 const groups = [
@@ -106,7 +106,7 @@ function Drawer({ open, onClose, counts }: { open: boolean; onClose: () => void;
       <div className="drawer-head">
         <IconBtn icon="close" label="Close the menu" onClick={onClose} />
         <Mark size={22} />
-        <span className="product">HostingInside WAF</span>
+        <span className="product">WAF</span>
       </div>
       {(open || closing) && <Menu onNavigate={onClose} counts={counts} />}
     </dialog>
@@ -152,7 +152,7 @@ export default function Shell() {
   return (
     <div className={'app' + (hidden ? ' sidebar-hidden' : '')}>
       <aside className="sidebar" aria-label="Menu">
-        <NavLink to="/overview" className="sidebar-brand" aria-label="HostingInside WAF, overview"><Mark size={24} /><span className="product">HostingInside WAF</span></NavLink>
+        <NavLink to="/overview" className="sidebar-brand" aria-label="HostingInside WAF, overview"><Mark size={24} /><span className="product">WAF</span></NavLink>
         <Menu counts={counts} />
       </aside>
       <div className="main-col">
@@ -160,7 +160,7 @@ export default function Shell() {
           <button type="button" className="menu-btn" aria-label={phone ? 'Open the menu' : hidden ? 'Show the menu' : 'Hide the menu'} aria-expanded={phone ? drawer : !hidden} onClick={toggle}>
             <span /><span /><span />
           </button>
-          <NavLink to="/overview" className="brand topbar-brand" aria-label="HostingInside WAF, overview"><Mark size={24} /><span className="product">HostingInside WAF</span></NavLink>
+          <NavLink to="/overview" className="brand topbar-brand" aria-label="HostingInside WAF, overview"><Mark size={24} /><span className="product">WAF</span></NavLink>
           <nav className="crumbs" aria-label="You are here">
             <span className="hide-s">{EDGE}</span><span className="sep hide-s">/</span>
             {crumbs.map((c, i) => (
@@ -174,6 +174,7 @@ export default function Shell() {
           <span className="spacer" />
           <span className={'dot hide-s' + (system && !system.engine_ok ? ' off' : '')} aria-hidden="true" />
           <span className="engine hide-s">{system ? (system.engine_ok ? 'Engine running' : 'Engine unreachable') : 'Checking engine'}</span>
+          <ThemeToggle />
           {!loc.pathname.startsWith('/sites/new') && <Btn kind="primary" small icon="plus" onClick={() => navigate('/sites/new')}>Add a site</Btn>}
         </header>
         <main className="canvas">

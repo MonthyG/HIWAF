@@ -16,6 +16,10 @@ export function ChartBox({ draw, deps, height, label }: { draw: (el: HTMLDivElem
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (ref.current) draw(ref.current)
+    // charts read their colours from the theme when drawn, so a theme switch redraws them
+    const redraw = () => { if (ref.current) draw(ref.current) }
+    window.addEventListener('themechange', redraw)
+    return () => window.removeEventListener('themechange', redraw)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps)
   return <div ref={ref} className="chart" style={{ minHeight: height }} aria-label={label} />
@@ -157,7 +161,7 @@ export default function Overview() {
       labels, height: 300, format: window.Charts.fmt.int,
       series: [
         { name: 'Requests', values: ov.series.map((p) => p.requests) },
-        { name: 'Stopped', values: ov.series.map((p) => p.blocked), colour: '#4a8ad6' },
+        { name: 'Stopped', values: ov.series.map((p) => p.blocked) },
       ],
     })
     const legendSlot = el.parentElement?.querySelector('.legend-slot')
@@ -167,7 +171,7 @@ export default function Overview() {
   const typeDraw = (el: HTMLDivElement) => {
     const rows = (ov?.attack_types ?? []).map((c) => ({ label: categoryLabel(c.key), value: c.count }))
     if (!rows.length) { el.innerHTML = ''; return }
-    window.Charts.barList(el, rows, { thin: true, colour: '#4a8ad6' })
+    window.Charts.barList(el, rows, { thin: true })
   }
 
   const ordered = [...sites].sort((a, b) => (counts[b.id]?.requests ?? 0) - (counts[a.id]?.requests ?? 0)).slice(0, 5)
