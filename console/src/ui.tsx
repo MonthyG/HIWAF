@@ -19,7 +19,11 @@ const paths: Record<string, ReactNode> = {
   trash: <><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></>,
   edit: <><path d="M12 20h9M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z" /></>,
   upload: <><path d="M12 15V3M7 8l5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" /></>,
+  flood: <><path d="M2 12h3l2-6 3 12 3-9 2 6 2-3h5" /></>,
+  bot: <><rect x="4" y="8" width="16" height="12" rx="3" /><path d="M12 4v4M9 13h.01M15 13h.01M2 14h2M20 14h2" /></>,
+  key: <><circle cx="8" cy="15" r="4" /><path d="m10.8 12.2 9.2-9.2M17 6l3 3M14 9l2 2" /></>,
   sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>,
+  monitor: <><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></>,
   moon: <><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></>,
 }
 
@@ -64,17 +68,57 @@ export function IconBtn({ icon, label, ...rest }: React.ButtonHTMLAttributes<HTM
   )
 }
 
-/** Light/dark switch. The choice is kept in localStorage; with none saved, main.tsx follows the system setting. */
-export function ThemeToggle() {
-  const [dark, setDark] = useState(() => document.documentElement.dataset.theme === 'dark')
-  const flip = () => {
-    const next = dark ? 'light' : 'dark'
-    document.documentElement.dataset.theme = next
-    try { localStorage.setItem('theme', next) } catch { /* private window: the choice lasts this visit */ }
-    setDark(!dark)
+export type ThemeChoice = 'light' | 'dark' | 'system'
+const darkQuery = matchMedia('(prefers-color-scheme: dark)')
+
+export function savedTheme(): ThemeChoice {
+  try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') return t } catch { /* storage blocked */ }
+  return 'system'
+}
+
+/** Paints the theme; 'system' follows the computer's setting, also when it changes later. Charts redraw on 'themechange'. */
+export function applyTheme(choice: ThemeChoice) {
+  const paint = () => {
+    document.documentElement.dataset.theme = choice === 'system' ? (darkQuery.matches ? 'dark' : 'light') : choice
     window.dispatchEvent(new Event('themechange'))
   }
-  return <IconBtn icon={dark ? 'sun' : 'moon'} label={dark ? 'Light mode' : 'Dark mode'} onClick={flip} />
+  darkQuery.onchange = choice === 'system' ? paint : null
+  paint()
+}
+
+/** Light / Dark / System menu in the top bar, like the admin panel's. */
+export function ThemeMenu() {
+  const [choice, setChoice] = useState<ThemeChoice>(savedTheme)
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const close = (e: Event) => { if (!(e instanceof KeyboardEvent ? e.key === 'Escape' : !ref.current?.contains(e.target as Node))) return; setOpen(false) }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', close)
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', close) }
+  }, [open])
+  const pick = (c: ThemeChoice) => {
+    try { if (c === 'system') localStorage.removeItem('theme'); else localStorage.setItem('theme', c) } catch { /* private window: the choice lasts this visit */ }
+    applyTheme(c)
+    setChoice(c)
+    setOpen(false)
+  }
+  const options: [ThemeChoice, string, string][] = [['light', 'Light', 'sun'], ['dark', 'Dark', 'moon'], ['system', 'System', 'monitor']]
+  return (
+    <div className="theme-menu" ref={ref}>
+      <IconBtn icon={document.documentElement.dataset.theme === 'dark' ? 'moon' : 'sun'} label="Theme" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} />
+      {open && (
+        <div className="theme-pop" role="menu" aria-label="Theme">
+          {options.map(([c, label, icon]) => (
+            <button key={c} type="button" role="menuitemradio" aria-checked={choice === c} onClick={() => pick(c)}>
+              <Icon name={icon} /><span>{label}</span>{choice === c && <span className="tick" aria-hidden="true">✓</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export function Field({ label, hint, error, children, id }: { label: string; hint?: ReactNode; error?: string; children: ReactNode; id?: string }) {

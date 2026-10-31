@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, errText } from '../api'
 import { useApp } from '../context'
-import type { Certificate, SiteView } from '../types'
-import { Btn, ChipsInput, Field } from '../ui'
+import type { Certificate, Port, SiteView } from '../types'
+import { Btn, ChipsInput, Field, IconBtn, Segmented } from '../ui'
 import { AppPicker } from './AppPicker'
 
 type Kind = 'proxy' | 'static' | 'redirect'
@@ -15,14 +15,16 @@ export default function SiteNew() {
   const navigate = useNavigate()
   const [domains, setDomains] = useState<string[]>([])
   const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
   const [kind, setKind] = useState<Kind>('proxy')
-  const [origins, setOrigins] = useState('')
+  const [origins, setOrigins] = useState<string[]>([''])
+  const [lb, setLb] = useState('round_robin')
+  const [adv, setAdv] = useState({ http_redirect: true, keep_host: true, hsts: false, gzip: false }) // the manager's defaults
   const [target, setTarget] = useState('')
   const [keepPath, setKeepPath] = useState(true)
   const [apps, setApps] = useState<string[]>([])
   const [tls, setTls] = useState('auto')
-  const [httpPort, setHttpPort] = useState(system?.http_port ?? 80)
-  const [httpsPort, setHttpsPort] = useState(system?.https_port ?? 443)
+  const [ports, setPorts] = useState<Port[]>([{ port: system?.http_port ?? 80, https: false }, { port: system?.https_port ?? 443, https: true }])
   const [certs, setCerts] = useState<Certificate[]>([])
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -37,12 +39,18 @@ export default function SiteNew() {
       setErr('A site that answers any host name cannot be encrypted. Add its domain, or choose "No encryption".')
       return
     }
+    if (!ports.length) { setErr('Add at least one listening port.'); return }
+    if (!encrypted && ports.some((p) => p.https)) { setErr('With "No encryption", every listening port must be HTTP.'); return }
+    if (new Set(ports.map((p) => p.port)).size !== ports.length) { setErr('Each listening port can be used once.'); return }
     const doc: Record<string, unknown> = {
-      name: name.trim() || undefined, type: kind, domains: doms,
-      ports: encrypted ? [{ port: httpPort, https: false }, { port: httpsPort, https: true }] : [{ port: httpPort, https: false }],
+      name: name.trim() || undefined, description: description.trim() || undefined, type: kind, domains: doms, ports,
       tls: tls === 'auto' ? { mode: 'auto' } : tls === 'off' ? { mode: 'off' } : { mode: 'uploaded', cert_id: tls },
+      advanced: adv,
     }
-    if (kind === 'proxy') doc.upstreams = origins.split(/[\s,]+/).filter(Boolean)
+    if (kind === 'proxy') {
+      doc.upstreams = origins.map((o) => o.trim()).filter(Boolean)
+      if ((doc.upstreams as string[]).length > 1) doc.lb_policy = lb
+    }
     if (kind === 'proxy' && apps.length) doc.waf = { apps }
     if (kind === 'redirect') doc.redirect = { url: target.trim(), code: 301, preserve_path: keepPath }
     setBusy(true)
@@ -81,6 +89,9 @@ export default function SiteNew() {
             <Field label="Name in the console" id="name">
               <input id="name" className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={64} placeholder="Defaults to the first domain" />
             </Field>
+            <Field label="Description" id="desc" hint="Optional. Who the site belongs to, or anything the team should know.">
+              <textarea id="desc" className="input" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={500} rows={2} />
+            </Field>
           </div>
         </div>
         <div className="setting">
@@ -99,8 +110,24 @@ export default function SiteNew() {
               ))}
             </div>
             {kind === 'proxy' && (
-              <Field label="Origins" id="origins" hint="host:port, or http(s)://host:port. Separate several with a comma.">
-                <input id="origins" className="input" required value={origins} onChange={(e) => setOrigins(e.target.value)} placeholder="10.20.1.15:8080" />
+              <Field label="Origins" id="origin-0" hint="host:port, or http(s)://host:port. With more than one, requests are shared between them.">
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {origins.map((o, i) => (
+                    <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <input id={`origin-${i}`} className="input" required={i === 0} value={o} aria-label={`Origin ${i + 1}`} placeholder="10.20.1.15:8080"
+                        onChange={(e) => setOrigins(origins.map((x, j) => (j === i ? e.target.value : x)))} />
+                      {origins.length > 1 && <IconBtn icon="trash" label={`Remove origin ${i + 1}`} onClick={() => setOrigins(origins.filter((_, j) => j !== i))} />}
+                    </div>
+                  ))}
+                  <Btn small icon="plus" style={{ width: 'max-content' }} onClick={() => setOrigins([...origins, ''])}>Add origin</Btn>
+                </div>
+              </Field>
+            )}
+            {kind === 'proxy' && origins.filter((o) => o.trim()).length > 1 && (
+              <Field label="With several origins, pick by" id="lb">
+                <select id="lb" className="input select" style={{ maxWidth: 320 }} value={lb} onChange={(e) => setLb(e.target.value)}>
+                  <option value="round_robin">Turns</option><option value="ip_hash">Client IP (a visitor keeps their origin)</option><option value="least_conn">Fewest open connections</option>
+                </select>
               </Field>
             )}
             {kind === 'redirect' && (
@@ -120,7 +147,23 @@ export default function SiteNew() {
           </div>
         )}
         <div className="setting">
-          <div><h2>Encryption</h2><p className="desc">HTTPS on {httpsPort}; plain HTTP on {httpPort} redirects to it.</p></div>
+          <div><h2>Listening ports</h2><p className="desc">The ports visitors connect to on the WAF, each plain HTTP or HTTPS.</p></div>
+          <div style={{ display: 'grid', gap: 8 }}>
+            {ports.map((p, i) => (
+              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input className="input num" type="number" min={1} max={65535} required style={{ maxWidth: 160 }} aria-label={`Port ${i + 1}`} value={p.port}
+                  onChange={(e) => setPorts(ports.map((x, j) => (j === i ? { ...x, port: Number(e.target.value) } : x)))} />
+                <Segmented label={`Port ${i + 1} protocol`} value={p.https ? 'https' : 'http'}
+                  onChange={(v) => setPorts(ports.map((x, j) => (j === i ? { ...x, https: v === 'https' } : x)))}
+                  options={[{ value: 'http', label: 'HTTP' }, { value: 'https', label: 'HTTPS' }]} />
+                {ports.length > 1 && <IconBtn icon="trash" label={`Remove port ${p.port}`} onClick={() => setPorts(ports.filter((_, j) => j !== i))} />}
+              </div>
+            ))}
+            <Btn small icon="plus" style={{ width: 'max-content' }} onClick={() => setPorts([...ports, { port: 8080, https: false }])}>Add listening port</Btn>
+          </div>
+        </div>
+        <div className="setting">
+          <div><h2>Encryption</h2><p className="desc">The certificate for the HTTPS ports.</p></div>
           <div style={{ display: 'grid', gap: 16 }}>
             <Field label="Certificate" id="tls">
               <select id="tls" className="input select" value={tls} onChange={(e) => setTls(e.target.value)}>
@@ -129,13 +172,14 @@ export default function SiteNew() {
                 <option value="off">No encryption (plain HTTP only)</option>
               </select>
             </Field>
-            <details>
-              <summary className="muted" style={{ cursor: 'pointer' }}>Other ports</summary>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 12 }}>
-                <Field label="HTTP port" id="hp"><input id="hp" className="input num" type="number" value={httpPort} onChange={(e) => setHttpPort(Number(e.target.value))} /></Field>
-                <Field label="HTTPS port" id="sp"><input id="sp" className="input num" type="number" value={httpsPort} disabled={tls === 'off'} onChange={(e) => setHttpsPort(Number(e.target.value))} /></Field>
-              </div>
-            </details>
+          </div>
+        </div>
+        <div className="setting">
+          <div><h2>Advanced</h2><p className="desc">Usually left as they are.</p></div>
+          <div style={{ display: 'grid', gap: 10 }}>
+            {([['http_redirect', 'Send plain HTTP visitors to HTTPS'], ['hsts', 'Tell browsers to use HTTPS for a year (HSTS)'], ['gzip', 'Compress answers'], ['keep_host', 'Pass the visitor’s host name to the origin']] as [keyof typeof adv, string][]).map(([k, l]) => (
+              <label key={k} className="check"><input type="checkbox" checked={adv[k]} onChange={(e) => setAdv({ ...adv, [k]: e.target.checked })} />{l}</label>
+            ))}
           </div>
         </div>
       </section>

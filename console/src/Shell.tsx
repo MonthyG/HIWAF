@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { api, DEMO } from './api'
 import { useApp } from './context'
 import type { SiteCounts } from './types'
-import { Btn, Icon, IconBtn, Mark, ThemeToggle } from './ui'
+import { Btn, Icon, IconBtn, Mark, ThemeMenu } from './ui'
 import { int, siteName } from './util'
 
 const groups = [
@@ -14,11 +14,18 @@ const groups = [
   ] },
   { name: 'Policy', pages: [
     { to: '/sites', icon: 'sites', label: 'Sites' },
-    { to: '/access', icon: 'access', label: 'Access' },
+    { to: '/access', icon: 'access', label: 'Allow & Deny' },
+    { to: '/rate-limiting', icon: 'flood', label: 'HTTP Flood', children: [
+      { to: '/rate-limiting', label: 'Rate limiting' },
+      { to: '/waiting-room', label: 'Waiting room' },
+    ] },
+    { to: '/anti-bot', icon: 'bot', label: 'Anti-Bot' },
+    { to: '/password-gate', icon: 'key', label: 'Auth' },
   ] },
   { name: 'System', pages: [{ to: '/settings', icon: 'settings', label: 'Settings' }] },
 ]
-const pageLabel: Record<string, string> = Object.fromEntries(groups.flatMap((g) => g.pages.map((p) => [p.to.slice(1), p.label])))
+const pageLabel: Record<string, string> = Object.fromEntries(groups.flatMap((g) => g.pages.flatMap((p) =>
+  'children' in p && p.children ? p.children.map((c) => [c.to.slice(1), c.label]) : [[p.to.slice(1), p.label]])))
 const areaLabel: Record<string, string> = { certificates: 'Certificates', account: 'Your account', tokens: 'API tokens', system: 'System' }
 
 const modeDot: Record<string, string> = { block: 'var(--positive)', detect: 'var(--warning)', off: '#5b5b60' }
@@ -47,7 +54,14 @@ function Menu({ onNavigate, counts }: { onNavigate?: () => void; counts: SiteCou
         {groups.map((g) => (
           <div key={g.name}>
             <div className="nav-group">{g.name}</div>
-            {g.pages.map((p) => (
+            {g.pages.map((p) => 'children' in p && p.children ? (
+              <details key={p.label} className="nav-sub" open>
+                <summary className="drawer-link"><Icon name={p.icon} /><span>{p.label}</span></summary>
+                {p.children.map((c) => (
+                  <NavLink key={c.to} to={c.to} className="drawer-link sub" onClick={onNavigate}><span>{c.label}</span></NavLink>
+                ))}
+              </details>
+            ) : (
               <NavLink key={p.to} to={p.to} className="drawer-link" onClick={onNavigate}>
                 <Icon name={p.icon} />
                 <span>{p.label}</span>
@@ -174,7 +188,7 @@ export default function Shell() {
           <span className="spacer" />
           <span className={'dot hide-s' + (system && !system.engine_ok ? ' off' : '')} aria-hidden="true" />
           <span className="engine hide-s">{system ? (system.engine_ok ? 'Engine running' : 'Engine unreachable') : 'Checking engine'}</span>
-          <ThemeToggle />
+          <ThemeMenu />
           {!loc.pathname.startsWith('/sites/new') && <Btn kind="primary" small icon="plus" onClick={() => navigate('/sites/new')}>Add a site</Btn>}
         </header>
         <main className="canvas">

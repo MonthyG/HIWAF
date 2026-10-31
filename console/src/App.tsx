@@ -10,6 +10,7 @@ import Sites from './pages/Sites'
 import SiteNew from './pages/SiteNew'
 import Site from './pages/Site'
 import Threats from './pages/Threats'
+import Policy from './pages/Policy'
 import Access from './pages/Access'
 import Activity from './pages/Activity'
 import Settings from './pages/Settings'
@@ -45,6 +46,10 @@ export default function App() {
         <Route path="/sites/:id" element={<Site />} />
         <Route path="/threats" element={<Threats />} />
         <Route path="/access" element={<Access />} />
+        <Route path="/rate-limiting" element={<Policy guard="rate" />} />
+        <Route path="/waiting-room" element={<Policy guard="queue" />} />
+        <Route path="/anti-bot" element={<Policy guard="bot" />} />
+        <Route path="/password-gate" element={<Policy guard="gate" />} />
         <Route path="/activity" element={<Activity />} />
         <Route path="/settings" element={<Navigate to="/settings/certificates" replace />} />
         <Route path="/settings/:area" element={<Settings />} />

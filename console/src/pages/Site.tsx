@@ -3,40 +3,18 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, errText, qs } from '../api'
 import { useApp } from '../context'
 import type { Attack, Certificate, Overview, Page, SiteView } from '../types'
-import { Btn, ChipsInput, Confirm, Empty, Field, Segmented, Switch, Tabs } from '../ui'
-import { categoryLabel, clock, int, pct, seconds, siteName, when } from '../util'
+import { Btn, ChipsInput, Confirm, Empty, Field, Segmented, Tabs } from '../ui'
+import { categoryLabel, clock, int, pct, siteName, when } from '../util'
 import { appLabels } from './AppPicker'
 import { ChartBox } from './Overview'
-import { AccessEditor, BotEditor, GateEditor, InspectionEditor, QueueEditor, RateEditor, useSave } from './guards'
+import { AccessEditor, InspectionEditor, useSave } from './guards'
+import { guardDefs, Stage, type GuardKey } from './Policy'
 import { originWords } from './Sites'
 
 type Tab = 'guards' | 'traffic' | 'setup'
 type StageKey = 'access' | 'rate' | 'gate' | 'queue' | 'bot' | 'inspect'
 
 const levelWord = ['', 'standard', 'strict', 'very strict', 'everything']
-
-function Stage({ k, title, on, summary, stops, stopsLabel, open, onToggleOpen, toggle, children }: {
-  k: StageKey; title: string; on: boolean; summary: React.ReactNode; stops?: number; stopsLabel?: string
-  open: boolean; onToggleOpen: () => void; toggle?: { checked: boolean; onChange: (v: boolean) => void }; children?: React.ReactNode
-}) {
-  return (
-    <div className={'stage' + (on ? ' on' : '')} id={`stage-${k}`}>
-      <div className="rail-line"><span className="node" /></div>
-      <div>
-        <h3>{title}</h3>
-        <div className="summary">{summary}</div>
-      </div>
-      <div className="side">
-        {stops !== undefined && (
-          <div className="stops"><div className="figure num">{int(stops)}</div><div className="label">{stopsLabel ?? 'stopped, 24 h'}</div></div>
-        )}
-        {toggle && <Switch label={`${title} on`} checked={toggle.checked} onChange={toggle.onChange} />}
-        <Btn small onClick={onToggleOpen} aria-expanded={open}>{open ? 'Close' : 'Edit'}</Btn>
-      </div>
-      {open && <div className="editor">{children}</div>}
-    </div>
-  )
-}
 
 export default function Site() {
   const { id = '' } = useParams()
@@ -77,16 +55,6 @@ export default function Site() {
     if (r.access.allow_countries?.length) parts.push(`only ${r.access.allow_countries.join(', ')}`)
     return parts.join(' · ') || 'No site rules; only the rules shared by every site apply.'
   }
-  const rateSummary = () => {
-    const l = r.rate_limit
-    const parts = [
-      l.access && `${l.access.requests} requests / ${seconds(l.access.window_sec)}`,
-      l.attack && `${l.attack.requests} threats / ${seconds(l.attack.window_sec)}`,
-      l.error && `${l.error.requests} errors / ${seconds(l.error.window_sec)}`,
-    ].filter(Boolean)
-    return parts.length ? <>Bans a source after <strong>{parts.join(', ')}</strong></> : 'Off: no source is ever banned.'
-  }
-
   return (
     <>
       <div className="title-row">
@@ -115,28 +83,15 @@ export default function Site() {
             summary={accessSummary()} stops={act.deny ?? 0} stopsLabel="refused, 24 h" open={open === 'access'} onToggleOpen={() => flip('access')}>
             <AccessEditor site={site} onDone={() => setOpen(null)} />
           </Stage>
-          <Stage k="rate" title="Rate limits" on={!!(r.rate_limit.access || r.rate_limit.attack || r.rate_limit.error)} summary={rateSummary()}
-            stops={act.rate_limit ?? 0} stopsLabel="from banned sources" open={open === 'rate'} onToggleOpen={() => flip('rate')}>
-            <RateEditor site={site} onDone={() => setOpen(null)} />
-          </Stage>
-          <Stage k="gate" title="Password gate" on={r.auth.enabled}
-            summary={r.auth.enabled ? <>Sign-in for <strong>{r.auth.users.map((u) => u.username).join(', ')}</strong>, kept {seconds(r.auth.session_ttl_sec || 86400)}</> : 'Off: anyone can reach the site.'}
-            stops={r.auth.enabled ? act.auth ?? 0 : undefined} stopsLabel="sign-in pages, 24 h" open={open === 'gate'} onToggleOpen={() => flip('gate')}
-            toggle={{ checked: r.auth.enabled, onChange: (v) => (v && !r.auth.users.length ? setOpen('gate') : save({ auth: { ...r.auth, enabled: v, users: r.auth.users } }, v ? 'Password gate on' : 'Password gate off')) }}>
-            <GateEditor site={site} onDone={() => setOpen(null)} />
-          </Stage>
-          <Stage k="queue" title="Queue" on={r.waiting_room.enabled}
-            summary={r.waiting_room.enabled ? <>Holds visitors beyond <strong>{int(r.waiting_room.max_active)}</strong> at once</> : 'Off: every visitor goes straight in.'}
-            stops={r.waiting_room.enabled ? act.wait ?? 0 : undefined} stopsLabel="held in line, 24 h" open={open === 'queue'} onToggleOpen={() => flip('queue')}
-            toggle={{ checked: r.waiting_room.enabled, onChange: (v) => (v && !r.waiting_room.max_active ? setOpen('queue') : save({ waiting_room: { ...r.waiting_room, enabled: v } }, v ? 'Queue on' : 'Queue off')) }}>
-            <QueueEditor site={site} onDone={() => setOpen(null)} />
-          </Stage>
-          <Stage k="bot" title="Bot check" on={r.bot_challenge.enabled}
-            summary={r.bot_challenge.enabled ? <>Browsers prove themselves once an hour; work level <strong>{r.bot_challenge.difficulty}</strong></> : 'Off: scripts and crawlers are not challenged.'}
-            stops={r.bot_challenge.enabled ? act.challenge ?? 0 : undefined} stopsLabel="challenges, 24 h" open={open === 'bot'} onToggleOpen={() => flip('bot')}
-            toggle={{ checked: r.bot_challenge.enabled, onChange: (v) => save({ bot_challenge: { ...r.bot_challenge, enabled: v } }, v ? 'Bot check on' : 'Bot check off') }}>
-            <BotEditor site={site} onDone={() => setOpen(null)} />
-          </Stage>
+          {(['rate', 'gate', 'queue', 'bot'] as GuardKey[]).map((k) => {
+            const g = guardDefs[k]
+            return (
+              <Stage key={k} k={k} title={g.title} on={g.on(r)} summary={g.summary(r)} stops={g.showStops(r) ? act[g.act] ?? 0 : undefined} stopsLabel={g.stopsLabel}
+                open={open === k} onToggleOpen={() => flip(k)} toggle={g.toggle?.(r, save, () => setOpen(k))}>
+                <g.Editor site={site} onDone={() => setOpen(null)} />
+              </Stage>
+            )
+          })}
           <Stage k="inspect" title="Threat inspection" on={r.waf.mode !== 'off'}
             summary={r.waf.mode === 'off' ? 'Off: requests are not inspected.' : <>{r.waf.mode === 'block' ? 'Stops' : 'Logs but lets through'} threats at the <strong>{levelWord[r.waf.paranoia]}</strong> level; {Object.values(r.waf.protections).filter(Boolean).length} of {Object.keys(r.waf.protections).length} kinds checked{r.waf.apps?.length ? <>; <strong>{appLabels(r.waf.apps, apps)}</strong> admin allowed</> : ''}{r.exclusions?.length ? `; ${r.exclusions.length} rule exception${r.exclusions.length > 1 ? 's' : ''}` : ''}</>}
             stops={act.block ?? 0} stopsLabel={r.waf.mode === 'detect' ? 'stopped (Watch)' : 'stopped, 24 h'} open={open === 'inspect'} onToggleOpen={() => flip('inspect')}>

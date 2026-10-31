@@ -18,7 +18,7 @@ export default function Access() {
     <>
       <div className="title-row">
         <div>
-          <h1>Access</h1>
+          <h1>Allow &amp; Deny</h1>
           <p className="sub">Who is always let in and who is refused, before any other guard looks at a request.</p>
         </div>
       </div>
