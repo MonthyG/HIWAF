@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { flushSync } from 'react-dom'
 
 // ---------- icons: one outline set, 1.5px, drawn for this console ----------
 
@@ -23,7 +24,6 @@ const paths: Record<string, ReactNode> = {
   bot: <><rect x="4" y="8" width="16" height="12" rx="3" /><path d="M12 4v4M9 13h.01M15 13h.01M2 14h2M20 14h2" /></>,
   key: <><circle cx="8" cy="15" r="4" /><path d="m10.8 12.2 9.2-9.2M17 6l3 3M14 9l2 2" /></>,
   sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>,
-  monitor: <><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></>,
   moon: <><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></>,
 }
 
@@ -86,38 +86,36 @@ export function applyTheme(choice: ThemeChoice) {
   paint()
 }
 
-/** Light / Dark / System menu in the top bar, like the admin panel's. */
-export function ThemeMenu() {
-  const [choice, setChoice] = useState<ThemeChoice>(savedTheme)
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const close = (e: Event) => { if (!(e instanceof KeyboardEvent ? e.key === 'Escape' : !ref.current?.contains(e.target as Node))) return; setOpen(false) }
-    document.addEventListener('mousedown', close)
-    document.addEventListener('keydown', close)
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', close) }
-  }, [open])
-  const pick = (c: ThemeChoice) => {
-    try { if (c === 'system') localStorage.removeItem('theme'); else localStorage.setItem('theme', c) } catch { /* private window: the choice lasts this visit */ }
-    applyTheme(c)
-    setChoice(c)
-    setOpen(false)
+/** Sun/moon button like the customer panel's: the new theme grows out of the button in a circle (View Transitions). */
+export function ThemeToggle() {
+  const ref = useRef<HTMLButtonElement>(null)
+  const [dark, setDark] = useState(() => document.documentElement.dataset.theme === 'dark')
+  const flip = async () => {
+    const next: ThemeChoice = dark ? 'light' : 'dark'
+    const swap = () => {
+      try { localStorage.setItem('theme', next) } catch { /* private window: the choice lasts this visit */ }
+      applyTheme(next)
+      flushSync(() => setDark(next === 'dark'))
+    }
+    const el = ref.current
+    if (!el || !document.startViewTransition || matchMedia('(prefers-reduced-motion: reduce)').matches) { swap(); return }
+    try {
+      await document.startViewTransition(swap).ready
+    } catch {
+      return // the browser skipped the animation (e.g. the tab is hidden); the theme has still changed
+    }
+    const { top, left, width, height } = el.getBoundingClientRect()
+    const x = left + width / 2, y = top + height / 2
+    const r = Math.hypot(Math.max(left, innerWidth - left), Math.max(top, innerHeight - top))
+    document.documentElement.animate(
+      { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${r}px at ${x}px ${y}px)`] },
+      { duration: 400, easing: 'ease-in-out', pseudoElement: '::view-transition-new(root)' },
+    )
   }
-  const options: [ThemeChoice, string, string][] = [['light', 'Light', 'sun'], ['dark', 'Dark', 'moon'], ['system', 'System', 'monitor']]
   return (
-    <div className="theme-menu" ref={ref}>
-      <IconBtn icon={document.documentElement.dataset.theme === 'dark' ? 'moon' : 'sun'} label="Theme" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} />
-      {open && (
-        <div className="theme-pop" role="menu" aria-label="Theme">
-          {options.map(([c, label, icon]) => (
-            <button key={c} type="button" role="menuitemradio" aria-checked={choice === c} onClick={() => pick(c)}>
-              <Icon name={icon} /><span>{label}</span>{choice === c && <span className="tick" aria-hidden="true">✓</span>}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <button ref={ref} type="button" className="icon-btn" aria-label={dark ? 'Light mode' : 'Dark mode'} title={dark ? 'Light mode' : 'Dark mode'} onClick={flip}>
+      <Icon name={dark ? 'sun' : 'moon'} />
+    </button>
   )
 }
 

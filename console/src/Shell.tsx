@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { api, DEMO } from './api'
 import { useApp } from './context'
 import type { SiteCounts } from './types'
-import { Btn, Icon, IconBtn, Mark, ThemeMenu } from './ui'
+import { Btn, Icon, IconBtn, Mark, ThemeToggle } from './ui'
 import { int, siteName } from './util'
 
 const groups = [
@@ -188,7 +188,7 @@ export default function Shell() {
           <span className="spacer" />
           <span className={'dot hide-s' + (system && !system.engine_ok ? ' off' : '')} aria-hidden="true" />
           <span className="engine hide-s">{system ? (system.engine_ok ? 'Engine running' : 'Engine unreachable') : 'Checking engine'}</span>
-          <ThemeMenu />
+          <ThemeToggle />
           {!loc.pathname.startsWith('/sites/new') && <Btn kind="primary" small icon="plus" onClick={() => navigate('/sites/new')}>Add a site</Btn>}
         </header>
         <main className="canvas">

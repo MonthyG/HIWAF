@@ -259,12 +259,8 @@ tbody tr[aria-selected="true"] td { background: var(--active); }
 .icon-btn { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 999px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
 .icon-btn:hover { color: var(--text); background: var(--raised); }
 .icon-btn svg { width: 16px; height: 16px; }
-.theme-menu { position: relative; }
-.theme-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; min-width: 150px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--surface); box-shadow: var(--shadow); display: grid; }
-.theme-pop button { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text); cursor: pointer; text-align: left; }
-.theme-pop button:hover { background: var(--raised); }
-.theme-pop svg { width: 15px; height: 15px; color: var(--muted); }
-.theme-pop .tick { margin-left: auto; color: var(--accent); }
+/* theme switch: the new theme is clipped in by a circle from the button (ThemeToggle), so the default cross-fade is off */
+::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
 
 .field { display: grid; gap: 8px; min-width: 0; }
 .field > label, .field > .label { font-weight: 500; }
