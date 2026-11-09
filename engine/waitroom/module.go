@@ -24,7 +24,9 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"go.uber.org/zap"
 
+	"hostinginside/waf/engine/clientip"
 	"hostinginside/waf/engine/events"
+	"hostinginside/waf/engine/ratelimit"
 )
 
 const (
@@ -34,6 +36,10 @@ const (
 	defaultTTL     = 60
 	refreshSec     = 5
 	queueStaleness = 4 * refreshSec * time.Second
+	// maxPerClient caps the slots plus queue places one client IP (or IPv6 /64)
+	// can hold, so a script minting fresh cookies can't fill the room alone.
+	// shortcut: fixed value, fine for offices behind one NAT; make it a site setting if one hits it.
+	maxPerClient = 32
 )
 
 //go:embed page.html
@@ -106,6 +112,11 @@ type room struct {
 	active map[string]time.Time // visitor -> last request
 	queue  []string             // waiting visitors, oldest first
 	polled map[string]time.Time // waiting visitor -> last poll
+	client map[string]string    // visitor in active or queue -> client key (IP or /64)
+}
+
+func newRoom() *room {
+	return &room{active: map[string]time.Time{}, polled: map[string]time.Time{}, client: map[string]string{}}
 }
 
 var (
@@ -118,7 +129,7 @@ func roomFor(site string) *room {
 	defer roomsMu.Unlock()
 	r, ok := rooms[site]
 	if !ok {
-		r = &room{active: map[string]time.Time{}, polled: map[string]time.Time{}}
+		r = newRoom()
 		rooms[site] = r
 	}
 	return r
@@ -132,14 +143,18 @@ func Stats(site string) (active, waiting int) {
 	return len(r.active), len(r.queue)
 }
 
-// admit decides for visitor id at now: it returns 0 when the visitor may
-// proceed, otherwise its 1-based queue position.
-func (r *room) admit(id string, max int, ttl time.Duration, now time.Time) int {
+// admit decides for visitor id, from client key ip, at now: it returns 0 when
+// the visitor may proceed, otherwise its 1-based queue position. fresh means
+// the request had no valid cookie: such a visitor may take a free slot but
+// never joins the queue, since a client that drops cookies would add a new
+// entry with every request; it is queued when it comes back with the cookie.
+func (r *room) admit(id, ip string, fresh bool, max int, ttl time.Duration, now time.Time) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for v, seen := range r.active {
 		if now.Sub(seen) > ttl {
 			delete(r.active, v)
+			delete(r.client, v)
 		}
 	}
 	kept := r.queue[:0]
@@ -148,6 +163,7 @@ func (r *room) admit(id string, max int, ttl time.Duration, now time.Time) int {
 			kept = append(kept, v)
 		} else {
 			delete(r.polled, v)
+			delete(r.client, v)
 		}
 	}
 	r.queue = kept
@@ -163,6 +179,9 @@ func (r *room) admit(id string, max int, ttl time.Duration, now time.Time) int {
 			break
 		}
 	}
+	if pos < 0 && ip != "" && r.held(ip) >= maxPerClient {
+		return len(r.queue) + 1 // this client already holds its share; not added
+	}
 	free := max - len(r.active)
 	// Admit if a slot is free for this visitor: queued visitors ahead of it
 	// take the free slots first.
@@ -172,14 +191,30 @@ func (r *room) admit(id string, max int, ttl time.Duration, now time.Time) int {
 			delete(r.polled, id)
 		}
 		r.active[id] = now
+		r.client[id] = ip
 		return 0
 	}
+	if pos < 0 && fresh {
+		return len(r.queue) + 1
+	}
 	if pos < 0 {
+		r.client[id] = ip
 		r.queue = append(r.queue, id)
 		pos = len(r.queue) - 1
 	}
 	r.polled[id] = now
 	return pos + 1
+}
+
+// held counts the visitors of client key ip in the room.
+func (r *room) held(ip string) int {
+	n := 0
+	for _, c := range r.client {
+		if c == ip {
+			n++
+		}
+	}
+	return n
 }
 
 func (wr *WaitRoom) sign(id string) string {
@@ -211,7 +246,7 @@ func (wr *WaitRoom) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddy
 			HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode})
 	}
 	ttl := time.Duration(wr.SessionTTLSec) * time.Second
-	pos := roomFor(wr.SiteID).admit(id, wr.MaxActive, ttl, time.Now())
+	pos := roomFor(wr.SiteID).admit(id, ratelimit.Key(clientip.Get(r)), !ok, wr.MaxActive, ttl, time.Now())
 	if pos == 0 {
 		return next.ServeHTTP(w, r)
 	}

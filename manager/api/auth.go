@@ -201,11 +201,14 @@ func CleanAdminNote(ctx context.Context, st *store.Store, path string) (bool, er
 
 // loginLimiter counts failed logins per client address and per account.
 type loginLimiter struct {
-	mu   sync.Mutex
-	fail map[string][]time.Time
+	mu      sync.Mutex
+	fail    map[string][]time.Time
+	sweepAt int // map size that triggers dropping keys with no recent failures
 }
 
-func newLoginLimiter() *loginLimiter { return &loginLimiter{fail: map[string][]time.Time{}} }
+func newLoginLimiter() *loginLimiter {
+	return &loginLimiter{fail: map[string][]time.Time{}, sweepAt: 1024}
+}
 
 func (l *loginLimiter) recent(key string, now time.Time) []time.Time {
 	kept := l.fail[key][:0]
@@ -232,6 +235,14 @@ func (l *loginLimiter) failed(key string, now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.fail[key] = append(l.recent(key, now), now)
+	// Keys are only pruned when seen again, so one-off usernames would pile up
+	// forever; sweep them, at most once per doubling to keep this amortised O(1).
+	if len(l.fail) >= l.sweepAt {
+		for k := range l.fail {
+			l.recent(k, now)
+		}
+		l.sweepAt = max(1024, 2*len(l.fail))
+	}
 }
 
 func (l *loginLimiter) reset(key string) {
@@ -278,6 +289,10 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	var req loginReq
 	if err := decode(w, r, &req); err != nil {
 		a.writeErr(w, err)
+		return
+	}
+	if len(req.Username) > 64 { // no real account is longer; keeps limiter keys small
+		writeJSON(w, http.StatusUnauthorized, errBody{Error: "wrong username or password"})
 		return
 	}
 	key, userKey, t := clientKey(r), "user:"+strings.ToLower(req.Username), time.Now()
@@ -496,7 +511,8 @@ type tokenView struct {
 	Project  string     `json:"project,omitempty"` // the token acts only for this project
 	Created  time.Time  `json:"created"`
 	LastUsed *time.Time `json:"last_used,omitempty"`
-	Token    string     `json:"token,omitempty"` // only in the create response
+	Expires  *time.Time `json:"expires,omitempty"` // absent = never
+	Token    string     `json:"token,omitempty"`   // only in the create response
 }
 
 func (a *API) listTokens(w http.ResponseWriter, r *http.Request) {
@@ -512,6 +528,10 @@ func (a *API) listTokens(w http.ResponseWriter, r *http.Request) {
 			lu := t.LastUsed
 			v.LastUsed = &lu
 		}
+		if !t.Expires.IsZero() {
+			e := t.Expires
+			v.Expires = &e
+		}
 		out = append(out, v)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -519,8 +539,9 @@ func (a *API) listTokens(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) createToken(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name    string `json:"name"`
-		Project string `json:"project"` // empty = an operator token
+		Name        string `json:"name"`
+		Project     string `json:"project"`      // empty = an operator token
+		ExpiresDays int    `json:"expires_days"` // 0 = never
 	}
 	if err := decode(w, r, &req); err != nil {
 		a.writeErr(w, err)
@@ -534,13 +555,22 @@ func (a *API) createToken(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, badRequest("project", "must be 1-64 letters, digits, - or _"))
 		return
 	}
-	secret := tokenPrefix + randomString(24)
-	id := site.NewObjectID("t")
-	if err := a.st.CreateToken(r.Context(), id, req.Name, req.Project, hashHex(secret)); err != nil {
+	if req.ExpiresDays < 0 || req.ExpiresDays > 3650 {
+		a.writeErr(w, badRequest("expires_days", "must be 0 (never) to 3650"))
+		return
+	}
+	v := tokenView{ID: site.NewObjectID("t"), Name: req.Name, Project: req.Project, Created: now(),
+		Token: tokenPrefix + randomString(24)}
+	var exp time.Time
+	if req.ExpiresDays > 0 {
+		exp = v.Created.Add(time.Duration(req.ExpiresDays) * 24 * time.Hour)
+		v.Expires = &exp
+	}
+	if err := a.st.CreateToken(r.Context(), v.ID, req.Name, req.Project, hashHex(v.Token), exp); err != nil {
 		a.writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, tokenView{ID: id, Name: req.Name, Project: req.Project, Created: now(), Token: secret})
+	writeJSON(w, http.StatusCreated, v)
 }
 
 func (a *API) deleteToken(w http.ResponseWriter, r *http.Request) {

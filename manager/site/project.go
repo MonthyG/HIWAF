@@ -21,6 +21,7 @@ func ValidProject(p string) bool { return projectRE.MatchString(p) }
 func CheckTenant(d Doc) error {
 	for i, dom := range d.Domains {
 		at := fmt.Sprintf("domains[%d]", i)
+		dom = strings.ToLower(strings.TrimSpace(dom)) // as Resolve stores it, so " *" can't slip through
 		if dom == "*" {
 			return verr(at, "a project's site cannot answer every host name")
 		}
@@ -45,9 +46,10 @@ func CheckTenant(d Doc) error {
 	return nil
 }
 
-// tenantUpstream accepts an origin given as an IP address that is not the
-// WAF host itself (loopback, unspecified) nor link-local (cloud metadata).
-// Host names are refused: they could resolve to such an address later.
+// tenantUpstream accepts an origin given as a public IP address. Loopback,
+// private, link-local (cloud metadata) and CGNAT addresses would let a project
+// reach the WAF host or the network behind it. Host names are refused: they
+// could resolve to such an address later.
 func tenantUpstream(u string) error {
 	hostport := u
 	if strings.Contains(u, "://") {
@@ -65,8 +67,11 @@ func tenantUpstream(u string) error {
 	if ip == nil {
 		return fmt.Errorf("must be an IP address, not a host name, got %q", host)
 	}
-	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
-		return fmt.Errorf("%s is not a reachable origin for a project's site", ip)
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() || cgnat.Contains(ip) {
+		return fmt.Errorf("%s is not a public address; use your server's public IP", ip)
 	}
 	return nil
 }
+
+// cgnat is the carrier-grade NAT range (RFC 6598), private like 10/8.
+var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}

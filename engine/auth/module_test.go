@@ -123,6 +123,22 @@ func TestSessionExpiresAndIsSiteBound(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestPasswordChangeEndsSessions(t *testing.T) {
+	a := newAuth(t)
+	now := time.Now()
+	v := a.session("alice", now.Add(time.Minute))
+
+	same := newAuth(t) // config reloaded, password unchanged: still signed in
+	same.Users = a.Users
+	require.NoError(t, same.setup())
+	_, ok := same.checkSession(v, now)
+	assert.True(t, ok)
+
+	changed := newAuth(t) // new bcrypt hash for alice
+	_, ok = changed.checkSession(v, now)
+	assert.False(t, ok)
+}
+
 func TestValidateRejectsPlainPassword(t *testing.T) {
 	a := newAuth(t)
 	a.Users = []User{{Username: "x", PasswordHash: "plain"}}

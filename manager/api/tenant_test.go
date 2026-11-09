@@ -1,10 +1,13 @@
 package api
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,7 +43,7 @@ func siteIDs(t *testing.T, rec *httptest.ResponseRecorder) []string {
 	return ids
 }
 
-const tenantDoc1 = `{"domains":["shop.alpha.test"],"upstreams":["10.0.0.5:8080"]}`
+const tenantDoc1 = `{"domains":["shop.alpha.test"],"upstreams":["203.0.113.5:8080"]}`
 
 func TestProjectsSeeOnlyTheirSites(t *testing.T) {
 	h, _ := newTestAPI(t)
@@ -89,15 +92,21 @@ func TestProjectGuardrails(t *testing.T) {
 	h, _ := newTestAPI(t)
 	createSite(t, h, `{"domains":["taken.example.test"],"upstreams":["10.0.0.9:80"]}`)
 	for _, c := range []struct{ name, doc, field string }{
-		{"catch-all", `{"domains":["*"],"upstreams":["10.0.0.5:80"],"tls":{"mode":"off"}}`, "domains[0]"},
-		{"top-level wildcard", `{"domains":["*.com"],"upstreams":["10.0.0.5:80"]}`, "domains[0]"},
-		{"own ports", `{"domains":["a.alpha.test"],"upstreams":["10.0.0.5:80"],"ports":[{"port":2019}]}`, "ports"},
+		{"catch-all", `{"domains":["*"],"upstreams":["203.0.113.5:80"],"tls":{"mode":"off"}}`, "domains[0]"},
+		{"top-level wildcard", `{"domains":["*.com"],"upstreams":["203.0.113.5:80"]}`, "domains[0]"},
+		{"catch-all with a space", `{"domains":[" *"],"upstreams":["203.0.113.5:80"],"tls":{"mode":"off"}}`, "domains[0]"},
+		{"top-level wildcard with a space", `{"domains":[" *.COM "],"upstreams":["203.0.113.5:80"]}`, "domains[0]"},
+		{"own ports", `{"domains":["a.alpha.test"],"upstreams":["203.0.113.5:80"],"ports":[{"port":2019}]}`, "ports"},
 		{"loopback origin", `{"domains":["a.alpha.test"],"upstreams":["127.0.0.1:2019"]}`, "upstreams[0]"},
 		{"metadata origin", `{"domains":["a.alpha.test"],"upstreams":["http://169.254.169.254:80"]}`, "upstreams[0]"},
+		{"private origin", `{"domains":["a.alpha.test"],"upstreams":["192.168.1.10:80"]}`, "upstreams[0]"},
+		{"cgnat origin", `{"domains":["a.alpha.test"],"upstreams":["100.64.0.1:80"]}`, "upstreams[0]"},
+		{"mapped private origin", `{"domains":["a.alpha.test"],"upstreams":["[::ffff:10.0.0.1]:80"]}`, "upstreams[0]"},
+		{"ipv6 private origin", `{"domains":["a.alpha.test"],"upstreams":["[fd00::1]:80"]}`, "upstreams[0]"},
 		{"ipv6 loopback", `{"domains":["a.alpha.test"],"upstreams":["[::1]:9443"]}`, "upstreams[0]"},
 		{"host name origin", `{"domains":["a.alpha.test"],"upstreams":["localhost:9443"]}`, "upstreams[0]"},
-		{"shared certificate", `{"domains":["a.alpha.test"],"upstreams":["10.0.0.5:80"],"tls":{"mode":"uploaded","cert_id":"c_000000000000"}}`, "tls.cert_id"},
-		{"shared ip group", `{"domains":["a.alpha.test"],"upstreams":["10.0.0.5:80"],"access":{"allow_groups":["g_000000000000"]}}`, "access"},
+		{"shared certificate", `{"domains":["a.alpha.test"],"upstreams":["203.0.113.5:80"],"tls":{"mode":"uploaded","cert_id":"c_000000000000"}}`, "tls.cert_id"},
+		{"shared ip group", `{"domains":["a.alpha.test"],"upstreams":["203.0.113.5:80"],"access":{"allow_groups":["g_000000000000"]}}`, "access"},
 	} {
 		rec := as(t, h, "alpha", "POST", "/api/v1/sites", c.doc)
 		assert.Equal(t, http.StatusBadRequest, rec.Code, c.name+": "+rec.Body.String())
@@ -106,7 +115,7 @@ func TestProjectGuardrails(t *testing.T) {
 		assert.Equal(t, c.field, e.Field, c.name)
 	}
 	// someone else's domain: refused without naming the other site
-	rec := as(t, h, "alpha", "POST", "/api/v1/sites", `{"domains":["taken.example.test"],"upstreams":["10.0.0.5:80"]}`)
+	rec := as(t, h, "alpha", "POST", "/api/v1/sites", `{"domains":["taken.example.test"],"upstreams":["203.0.113.5:80"]}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.NotContains(t, rec.Body.String(), "s_")
 	// the operator keeps its powers
@@ -150,4 +159,82 @@ func TestProjectTokens(t *testing.T) {
 	require.Len(t, list, 1)
 	assert.Equal(t, "alpha", list[0].Project)
 	assert.Equal(t, http.StatusBadRequest, as(t, h, "", "POST", "/api/v1/tokens", `{"name":"x","project":"a b"}`).Code)
+
+	// expiry: shown on create and in the list; out of range is refused
+	rec = as(t, h, "", "POST", "/api/v1/tokens", `{"name":"short","expires_days":30}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var short tokenView
+	decodeBody(t, rec, &short)
+	require.NotNil(t, short.Expires)
+	assert.WithinDuration(t, time.Now().Add(30*24*time.Hour), *short.Expires, time.Minute)
+	assert.Nil(t, tok.Expires, "no expires_days = never")
+	assert.Equal(t, http.StatusBadRequest, as(t, h, "", "POST", "/api/v1/tokens", `{"name":"x","expires_days":-1}`).Code)
+	assert.Equal(t, http.StatusBadRequest, as(t, h, "", "POST", "/api/v1/tokens", `{"name":"x","expires_days":3651}`).Code)
+}
+
+func TestProjectSiteCap(t *testing.T) {
+	old := maxProjectSites
+	maxProjectSites = 2
+	t.Cleanup(func() { maxProjectSites = old })
+	h, _ := newTestAPI(t)
+	for i, want := range []int{http.StatusCreated, http.StatusCreated, http.StatusForbidden} {
+		doc := fmt.Sprintf(`{"domains":["s%d.alpha.test"],"upstreams":["203.0.113.5:80"]}`, i)
+		rec := as(t, h, "alpha", "POST", "/api/v1/sites", doc)
+		assert.Equal(t, want, rec.Code, "site %d: %s", i, rec.Body.String())
+	}
+	// another project and the operator are not held back by alpha's sites
+	assert.Equal(t, http.StatusCreated, as(t, h, "beta", "POST", "/api/v1/sites", `{"domains":["s.beta.test"],"upstreams":["203.0.113.5:80"]}`).Code)
+	assert.Equal(t, http.StatusCreated, as(t, h, "", "POST", "/api/v1/sites", `{"domains":["op.test"],"upstreams":["10.0.0.1:80"]}`).Code)
+}
+
+// A project proves a domain with a TXT record before using it; the operator
+// and domains a site already has need no proof.
+func TestDomainOwnershipProof(t *testing.T) {
+	published := map[string][]string{} // fake DNS
+	var api *API
+	h, _ := newTestAPI(t, func(a *API) {
+		api = a
+		a.SetDomainCheck(func(_ context.Context, name string) ([]string, error) { return published[name], nil })
+	})
+	doc := `{"domains":["shop.alpha.test","*.cdn.alpha.test"],"upstreams":["203.0.113.5:80"]}`
+
+	rec := as(t, h, "alpha", "POST", "/api/v1/sites", doc)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	var e errBody
+	decodeBody(t, rec, &e)
+	assert.Equal(t, "domains[0]", e.Field)
+	assert.Contains(t, e.Error, "_hiwaf.shop.alpha.test")
+
+	// the check endpoint gives the record to publish
+	var v domainCheckView
+	decodeBody(t, as(t, h, "alpha", "GET", "/api/v1/domain-check?domain=Shop.Alpha.Test", ""), &v)
+	assert.Equal(t, "shop.alpha.test", v.Domain)
+	assert.Equal(t, "_hiwaf.shop.alpha.test", v.RecordName)
+	assert.True(t, v.Required)
+	assert.False(t, v.Verified)
+
+	published[v.RecordName] = []string{"unrelated", v.RecordValue}
+	_, wild := api.claimRecord("alpha", "*.cdn.alpha.test")
+	published["_hiwaf.cdn.alpha.test"] = []string{wild} // a wildcard is proven at its base
+	decodeBody(t, as(t, h, "alpha", "GET", "/api/v1/domain-check?domain=shop.alpha.test", ""), &v)
+	assert.True(t, v.Verified)
+
+	// another project's proof is not this project's
+	rec = as(t, h, "beta", "POST", "/api/v1/sites", `{"domains":["shop.alpha.test"],"upstreams":["203.0.113.5:80"]}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	rec = as(t, h, "alpha", "POST", "/api/v1/sites", doc)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var s struct{ ID string }
+	decodeBody(t, rec, &s)
+
+	// keeping its domains needs no proof again; adding one does
+	delete(published, v.RecordName)
+	assert.Equal(t, http.StatusOK, as(t, h, "alpha", "PATCH", "/api/v1/sites/"+s.ID, `{"name":"Shop"}`).Code)
+	rec = as(t, h, "alpha", "PATCH", "/api/v1/sites/"+s.ID, `{"domains":["shop.alpha.test","*.cdn.alpha.test","new.alpha.test"]}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	// the operator needs none, and bad names are refused
+	assert.Equal(t, http.StatusCreated, as(t, h, "", "POST", "/api/v1/sites", `{"domains":["ops.example.test"],"upstreams":["203.0.113.5:80"]}`).Code)
+	assert.Equal(t, http.StatusBadRequest, as(t, h, "alpha", "GET", "/api/v1/domain-check?domain=a%20b", "").Code)
 }

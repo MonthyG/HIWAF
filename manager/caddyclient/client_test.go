@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -75,5 +77,38 @@ func TestBansAndUnban(t *testing.T) {
 	}
 	if ok, err := c.Unban(context.Background(), "s_a b", "9.9.9.9"); ok || err != nil {
 		t.Fatalf("unban missing = %v %v", ok, err)
+	}
+}
+
+// A fresh engine listens on TCP until the first load moves its admin API to
+// the socket; after that every call goes through the socket.
+func TestUnixSocketWithBootstrap(t *testing.T) {
+	hits := map[string]int{}
+	handler := func(name string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits[name]++ })
+	}
+	tcp := httptest.NewServer(handler("tcp"))
+	defer tcp.Close()
+	sock := filepath.Join(t.TempDir(), "admin.sock")
+	c := &Client{BaseURL: "unix://" + sock, Bootstrap: tcp.URL}
+
+	if err := c.Load(context.Background(), map[string]any{}); err != nil {
+		t.Fatalf("bootstrap load: %v", err)
+	}
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Skipf("no unix sockets here: %v", err)
+	}
+	srv := &http.Server{Handler: handler("unix")}
+	go srv.Serve(ln)
+	defer srv.Close()
+	if err := c.Load(context.Background(), map[string]any{}); err != nil {
+		t.Fatalf("socket load: %v", err)
+	}
+	if _, err := c.WaitRooms(context.Background()); err == nil || errors.Is(err, ErrUnreachable) {
+		t.Fatalf("waitroom over the socket: want a decode error from the empty body, got %v", err)
+	}
+	if hits["tcp"] != 1 || hits["unix"] != 2 {
+		t.Fatalf("hits = %v, want tcp 1 (bootstrap) and unix 2", hits)
 	}
 }

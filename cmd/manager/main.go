@@ -49,6 +49,7 @@ type config struct {
 	DBPath             string   `json:"db_path"`
 	DataDir            string   `json:"data_dir"`
 	CaddyAdmin         string   `json:"caddy_admin"`
+	SkipDomainCheck    bool     `json:"skip_domain_check"` // let projects add domains without a TXT proof (test servers)
 	EventLog           string   `json:"event_log"`
 	AccessLog          string   `json:"access_log"`
 	APIKeys            []string `json:"api_keys"`
@@ -305,14 +306,33 @@ func consolePort(listen string) int {
 	return n
 }
 
+// bootstrapListen is Caddy's default admin address, where a fresh engine
+// listens until the first config load moves its admin API to the socket.
+const bootstrapListen = "localhost:2019"
+
+// adminAddress turns caddy_admin into the admin listen address pushed to
+// Caddy and, for a unix socket, the TCP URL used until the socket exists.
+// The socket (owner-only, in the data volume) keeps the unauthenticated admin
+// API away from anything else on the host network.
+func adminAddress(s string) (listen, bootstrap string, err error) {
+	u, err := url.Parse(s)
+	switch {
+	case err == nil && u.Scheme == "unix" && u.Host == "" && strings.HasPrefix(u.Path, "/"):
+		return "unix/" + u.Path + "|0600", "http://" + bootstrapListen, nil
+	case err == nil && u.Scheme == "http" && u.Host != "":
+		return u.Host, "", nil
+	}
+	return "", "", fmt.Errorf("caddy_admin must be unix:///path/to/admin.sock or a URL such as http://localhost:2019, got %q", s)
+}
+
 func run(cfgPath string, log *slog.Logger) error {
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
 		return err
 	}
-	admin, err := url.Parse(cfg.CaddyAdmin)
-	if err != nil || admin.Host == "" {
-		return fmt.Errorf("caddy_admin must be a URL such as http://localhost:2019, got %q", cfg.CaddyAdmin)
+	adminListen, bootstrap, err := adminAddress(cfg.CaddyAdmin)
+	if err != nil {
+		return err
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -347,15 +367,18 @@ func run(cfgPath string, log *slog.Logger) error {
 	}
 
 	var reserved []int
-	_, adminPort, _ := net.SplitHostPort(admin.Host)
-	if n, err := strconv.Atoi(adminPort); err == nil {
-		reserved = append(reserved, n)
+	for _, a := range []string{adminListen, bootstrapListen} {
+		if _, p, err := net.SplitHostPort(a); err == nil {
+			if n, err := strconv.Atoi(p); err == nil {
+				reserved = append(reserved, n)
+			}
+		}
 	}
 	if n := consolePort(cfg.Listen); n > 0 {
 		reserved = append(reserved, n)
 	}
 	opt := compile.Options{
-		AdminListen:     admin.Host,
+		AdminListen:     adminListen,
 		HTTPPort:        cfg.HTTPPort,
 		HTTPSPort:       cfg.HTTPSPort,
 		EventLog:        cfg.EventLog,
@@ -368,8 +391,11 @@ func run(cfgPath string, log *slog.Logger) error {
 		ACMEInternal:    cfg.ACMEInternal,
 		ReservedPorts:   reserved,
 	}
-	engine := &caddyclient.Client{BaseURL: cfg.CaddyAdmin}
+	engine := &caddyclient.Client{BaseURL: cfg.CaddyAdmin, Bootstrap: bootstrap}
 	a := api.New(st, engine, opt, cfg.APIKeys)
+	if !cfg.SkipDomainCheck {
+		a.SetDomainCheck(net.DefaultResolver.LookupTXT)
+	}
 	host, _ := os.Hostname()
 	notifier := &alert.Notifier{Store: st, Host: host, Log: log}
 	watcher := &alert.Watcher{Notifier: notifier, Probe: func(ctx context.Context) error {

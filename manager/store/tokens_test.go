@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,7 +32,7 @@ func TestTokensGainProjectColumn(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "", old.Project)
 
-	require.NoError(t, st.CreateToken(ctx, "t_new", "alpha svc", "alpha", "h-new"))
+	require.NoError(t, st.CreateToken(ctx, "t_new", "alpha svc", "alpha", "h-new", time.Time{}))
 	got, ok, err := st.TokenByHash(ctx, "h-new")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -39,4 +40,25 @@ func TestTokensGainProjectColumn(t *testing.T) {
 	list, err := st.ListTokens(ctx)
 	require.NoError(t, err)
 	assert.Len(t, list, 2)
+}
+
+func TestExpiredTokenStopsWorking(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	require.NoError(t, err)
+	defer st.Close()
+	require.NoError(t, st.CreateToken(ctx, "t_live", "live", "", "h-live", time.Now().Add(time.Hour)))
+	require.NoError(t, st.CreateToken(ctx, "t_dead", "dead", "", "h-dead", time.Now().Add(-time.Second)))
+	_, ok, err := st.TokenByHash(ctx, "h-live")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	_, ok, err = st.TokenByHash(ctx, "h-dead")
+	require.NoError(t, err)
+	assert.False(t, ok)
+	list, err := st.ListTokens(ctx)
+	require.NoError(t, err)
+	require.Len(t, list, 2) // still listed, so the operator sees it and can delete it
+	for _, tk := range list {
+		assert.False(t, tk.Expires.IsZero())
+	}
 }

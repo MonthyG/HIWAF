@@ -111,6 +111,17 @@ func TestLoginLimitPerIPv6Block(t *testing.T) {
 	assert.Equal(t, http.StatusOK, try("[2001:db8:0:1::1]:4000", "admin", pw), "the next /64 is another client")
 }
 
+func TestLoginLimiterForgetsOldKeys(t *testing.T) {
+	l := newLoginLimiter()
+	old := time.Now().Add(-2 * failureWindow)
+	for i := 0; i < 1023; i++ { // one below the first sweep
+		l.failed(fmt.Sprintf("user:x%d", i), old)
+	}
+	l.failed("user:fresh", time.Now()) // the 1024th key triggers the sweep
+	assert.Len(t, l.fail, 1, "keys with no recent failure are swept")
+	assert.True(t, l.blocked("user:fresh", time.Now(), 1), "recent failures are kept")
+}
+
 func TestLoginLimitPerAccount(t *testing.T) {
 	h, _, _, pw := newConsoleAPI(t)
 	for i := 0; i < maxUserFails; i++ {

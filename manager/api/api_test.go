@@ -63,7 +63,7 @@ func (f *fakeLoader) loads() int {
 	return len(f.configs)
 }
 
-func newTestAPI(t *testing.T) (http.Handler, *fakeLoader) {
+func newTestAPI(t *testing.T, setup ...func(*API)) (http.Handler, *fakeLoader) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "waf.db"))
 	require.NoError(t, err)
@@ -76,7 +76,11 @@ func newTestAPI(t *testing.T) (http.Handler, *fakeLoader) {
 		EventLog:        "events.log",
 		ChallengeSecret: base64.StdEncoding.EncodeToString(make([]byte, 32)),
 	}
-	return New(st, fl, opt, []string{testKey}).Handler(), fl
+	a := New(st, fl, opt, []string{testKey})
+	for _, f := range setup {
+		f(a)
+	}
+	return a.Handler(), fl
 }
 
 func do(t *testing.T, h http.Handler, method, path, body string) *httptest.ResponseRecorder {
@@ -157,6 +161,25 @@ func TestUnreachableIs503(t *testing.T) {
 	rec := do(t, h, "POST", "/api/v1/sites", minimalDoc)
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	assert.Equal(t, 0, listLen(t, h))
+}
+
+// A load the engine didn't answer may still be applied, so the saved config
+// is pushed again once the engine is back.
+func TestUnansweredLoadIsResynced(t *testing.T) {
+	old := resyncRetry
+	resyncRetry = 10 * time.Millisecond
+	defer func() { resyncRetry = old }()
+	h, fl := newTestAPI(t)
+	fl.mu.Lock()
+	fl.err = fmt.Errorf("%w", caddyclient.ErrUnreachable)
+	fl.mu.Unlock()
+	assert.Equal(t, http.StatusServiceUnavailable, do(t, h, "POST", "/api/v1/sites", minimalDoc).Code)
+	before := fl.loads()
+	fl.mu.Lock()
+	fl.err = nil
+	fl.mu.Unlock()
+	assert.Eventually(t, func() bool { return fl.loads() > before }, 2*time.Second, 10*time.Millisecond)
+	assert.Equal(t, 0, listLen(t, h), "the rolled-back site stays out")
 }
 
 func TestValidationErrorHasField(t *testing.T) {

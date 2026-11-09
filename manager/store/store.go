@@ -110,6 +110,7 @@ var eventColumns = []struct{ name, def string }{
 // tokenColumns are columns added to tokens after the first release.
 var tokenColumns = []struct{ name, def string }{
 	{"project", "TEXT NOT NULL DEFAULT ''"},
+	{"expires", "INTEGER NOT NULL DEFAULT 0"}, // unix ms; 0 = never
 }
 
 // addColumns adds the columns of table that are missing.

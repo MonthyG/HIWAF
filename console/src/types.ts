@@ -75,5 +75,5 @@ export interface Rulesets { dir: string; items: Ruleset[] }
 export interface Backup { name: string; size: number; created: string }
 export interface Alerts { webhook_url: string; heartbeat_url: string; engine_down_since?: string }
 export interface Me { username: string; totp_enabled: boolean; kind: 'user' | 'token'; project?: string }
-export interface Token { id: string; name: string; project?: string; created: string; last_used?: string; token?: string }
+export interface Token { id: string; name: string; project?: string; created: string; last_used?: string; expires?: string; token?: string }
 export type SiteCounts = Record<string, { requests: number; blocked: number; threats: number }>

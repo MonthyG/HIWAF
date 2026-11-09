@@ -56,3 +56,20 @@ func TestExampleConfigLoads(t *testing.T) {
 	_, err := loadConfig(filepath.Join("..", "..", "examples", "manager.json"))
 	require.NoError(t, err)
 }
+
+func TestAdminAddress(t *testing.T) {
+	for _, c := range []struct{ in, listen, bootstrap string }{
+		{"unix:///data/caddy-admin.sock", "unix//data/caddy-admin.sock|0600", "http://localhost:2019"},
+		{"http://localhost:2019", "localhost:2019", ""},
+	} {
+		l, b, err := adminAddress(c.in)
+		if err != nil || l != c.listen || b != c.bootstrap {
+			t.Errorf("adminAddress(%q) = %q, %q, %v; want %q, %q", c.in, l, b, err, c.listen, c.bootstrap)
+		}
+	}
+	for _, bad := range []string{"unix://relative.sock", "localhost:2019", "https://", ""} {
+		if _, _, err := adminAddress(bad); err == nil {
+			t.Errorf("adminAddress(%q) accepted", bad)
+		}
+	}
+}

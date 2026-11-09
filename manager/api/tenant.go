@@ -2,9 +2,16 @@ package api
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
+	"regexp"
+	"slices"
 	"strings"
+	"time"
 
 	"hostinginside/waf/manager/site"
 	"hostinginside/waf/manager/store"
@@ -88,6 +95,85 @@ func tenantDoc(p principal, d *site.Doc) error {
 	}
 	d.Project = p.Project
 	return site.CheckTenant(*d)
+}
+
+// --- domain ownership --------------------------------------------------------
+
+// A project proves a domain is its own with a DNS TXT record before a site of
+// it may use the domain; otherwise any customer could claim a domain someone
+// else points at the WAF later. The value is an HMAC of project and domain,
+// so nothing has to be stored: it is the same every time it is asked for.
+
+// TXTLookup resolves TXT records; net.DefaultResolver.LookupTXT in production.
+type TXTLookup func(ctx context.Context, name string) ([]string, error)
+
+// SetDomainCheck turns the ownership check on for project callers; nil turns it off.
+func (a *API) SetDomainCheck(l TXTLookup) { a.lookupTXT = l }
+
+var claimDomainRE = regexp.MustCompile(`^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
+
+// claimRecord returns the TXT record name and value that prove project owns
+// domain. A wildcard is proven at its base: *.shop.com by _hiwaf.shop.com.
+func (a *API) claimRecord(project, domain string) (name, value string) {
+	h := hmac.New(sha256.New, []byte(a.opt.ChallengeSecret))
+	h.Write([]byte("claim|" + project + "|" + domain))
+	return "_hiwaf." + strings.TrimPrefix(domain, "*."), "hiwaf-verify=" + hex.EncodeToString(h.Sum(nil)[:16])
+}
+
+// claimed reports whether the TXT record for project and domain is published.
+func (a *API) claimed(ctx context.Context, project, domain string) bool {
+	name, value := a.claimRecord(project, domain)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	txt, err := a.lookupTXT(ctx, name)
+	return err == nil && slices.Contains(txt, value)
+}
+
+// checkClaims requires a proof for every domain of d a project caller adds;
+// domains the site already had (prev) were proven when they were added.
+func (a *API) checkClaims(ctx context.Context, p principal, d site.Doc, prev *site.Doc) error {
+	if p.Project == "" || a.lookupTXT == nil {
+		return nil
+	}
+	var had []string
+	if prev != nil {
+		had = prev.Domains
+	}
+	for i, dom := range d.Domains {
+		dom = strings.ToLower(strings.TrimSpace(dom))
+		if slices.ContainsFunc(had, func(h string) bool { return strings.ToLower(strings.TrimSpace(h)) == dom }) {
+			continue
+		}
+		if !a.claimed(ctx, p.Project, dom) {
+			name, value := a.claimRecord(p.Project, dom)
+			return badRequest(fmt.Sprintf("domains[%d]", i), fmt.Sprintf(
+				"prove %s is yours first: add a DNS TXT record %s with the value %s", dom, name, value))
+		}
+	}
+	return nil
+}
+
+type domainCheckView struct {
+	Domain      string `json:"domain"`
+	RecordName  string `json:"record_name"`
+	RecordValue string `json:"record_value"`
+	Required    bool   `json:"required"` // false for the operator, or with the check off
+	Verified    bool   `json:"verified"`
+}
+
+// domainCheck tells a project caller which TXT record proves ?domain= and
+// whether it is published yet.
+func (a *API) domainCheck(w http.ResponseWriter, r *http.Request) {
+	dom := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("domain")))
+	if len(dom) > 253 || !claimDomainRE.MatchString(dom) {
+		a.writeErr(w, badRequest("domain", "a domain name such as shop.example.com"))
+		return
+	}
+	p := principalOf(r)
+	v := domainCheckView{Domain: dom, Required: p.Project != "" && a.lookupTXT != nil}
+	v.RecordName, v.RecordValue = a.claimRecord(p.Project, dom)
+	v.Verified = !v.Required || a.claimed(r.Context(), p.Project, dom)
+	writeJSON(w, http.StatusOK, v)
 }
 
 // hideOthers rewrites a validation error that names another site (a domain

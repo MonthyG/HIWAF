@@ -395,8 +395,8 @@ func TestBlockIPsFileInFeedsDir(t *testing.T) {
 	cfg, err := Config([]site.Resolved{r}, nil, o)
 	require.NoError(t, err)
 	siteRoute := servers(t, cfg)["waf"].(map[string]any)["routes"].([]any)[0].(map[string]any)
-	sub := siteRoute["handle"].([]any)[0].(map[string]any)["routes"].([]any)
-	acc := sub[0].(map[string]any)["handle"].([]any)[0].(accessHandler)
+	sub := siteRoute["handle"].([]any)[0].(map[string]any)["routes"].([]any) // [0] is the loop guard
+	acc := sub[1].(map[string]any)["handle"].([]any)[0].(accessHandler)
 	assert.Equal(t, "hi_access", acc.Handler)
 	assert.Equal(t, filepath.Join("/var/lib/hi-waf/feeds", "drop.txt"), acc.BlockIPsFile)
 }

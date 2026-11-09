@@ -197,6 +197,11 @@ func (a *Access) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhtt
 	if a.countryOf != nil && ip.IsValid() {
 		country = strings.ToUpper(a.countryOf(ip))
 	}
+	// An allow list means "only these": a public address GeoIP can't place is
+	// not on it. Private and loopback addresses have no country and still pass.
+	if country == "" && len(a.allowC) > 0 && ip.IsGlobalUnicast() && !ip.IsPrivate() {
+		return a.deny(r, events.TypeGeoBlock, "unknown")
+	}
 	if country != "" {
 		if len(a.allowC) > 0 && !a.allowC[country] {
 			return a.deny(r, events.TypeGeoBlock, country)

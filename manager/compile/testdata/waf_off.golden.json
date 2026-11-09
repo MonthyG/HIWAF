@@ -114,12 +114,34 @@
                     {
                       "handle": [
                         {
+                          "body": "loop detected: this site's origin points back at the WAF",
+                          "handler": "static_response",
+                          "status_code": 508
+                        }
+                      ],
+                      "match": [
+                        {
+                          "header": {
+                            "Hi-Waf-Loop": []
+                          }
+                        }
+                      ],
+                      "terminal": true
+                    },
+                    {
+                      "handle": [
+                        {
                           "handler": "reverse_proxy",
                           "headers": {
                             "request": {
                               "delete": [
                                 "X-Hi-Waf-Tx"
-                              ]
+                              ],
+                              "set": {
+                                "Hi-Waf-Loop": [
+                                  "1"
+                                ]
+                              }
                             }
                           },
                           "upstreams": [
@@ -157,7 +179,12 @@
                             "request": {
                               "delete": [
                                 "X-Hi-Waf-Tx"
-                              ]
+                              ],
+                              "set": {
+                                "Hi-Waf-Loop": [
+                                  "1"
+                                ]
+                              }
                             }
                           },
                           "upstreams": [

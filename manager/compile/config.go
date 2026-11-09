@@ -422,7 +422,14 @@ func siteRoutes(s site.Resolved, opt Options, tls bool) []any {
 	}
 	content = append(content, terminal(s, opt))
 
-	var routes []any
+	// A request that already passed through this WAF (an upstream pointing
+	// back at the WAF, or two sites proxying to each other) stops here
+	// instead of multiplying until the engine runs out of connections.
+	routes := []any{map[string]any{
+		"match":    []any{map[string]any{"header": map[string]any{LoopHeader: []string{}}}},
+		"handle":   []any{map[string]any{"handler": "static_response", "status_code": 508, "body": "loop detected: this site's origin points back at the WAF"}},
+		"terminal": true,
+	}}
 	if tls && s.HSTS {
 		routes = append(routes, map[string]any{"handle": []any{map[string]any{
 			"handler":  "headers",
@@ -504,6 +511,10 @@ func hasAccess(s site.Resolved) bool {
 		len(s.BlockCountries) > 0 || s.BlockIPsFile != "" || len(s.Rules) > 0
 }
 
+// LoopHeader marks requests the engine forwards to an origin; one arriving
+// with it came back from this WAF and is refused (508).
+const LoopHeader = "Hi-Waf-Loop"
+
 // reverseProxy dials each upstream without its scheme; https upstreams (the
 // validator keeps all upstreams on one scheme) get a TLS transport.
 func reverseProxy(s site.Resolved) map[string]any {
@@ -518,9 +529,11 @@ func reverseProxy(s site.Resolved) map[string]any {
 		list = append(list, map[string]any{"dial": u})
 	}
 	reqHeaders := map[string]any{"delete": []string{ratelimit.TxHeader}}
+	set := map[string]any{LoopHeader: []string{"1"}}
 	if !s.KeepHost {
-		reqHeaders["set"] = map[string]any{"Host": []string{"{http.reverse_proxy.upstream.hostport}"}}
+		set["Host"] = []string{"{http.reverse_proxy.upstream.hostport}"}
 	}
+	reqHeaders["set"] = set
 	h := map[string]any{
 		"handler":   "reverse_proxy",
 		"upstreams": list,

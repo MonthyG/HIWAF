@@ -162,7 +162,17 @@ func TestGeoBlocking(t *testing.T) {
 	err, _, _ = serve(a, "3.3.3.3", "GET", "/") // known, not in allow list
 	requireStatus(t, err, 403)
 
-	err, called, _ = serve(a, "9.9.9.9", "GET", "/") // unknown passes
+	err, _, _ = serve(a, "9.9.9.9", "GET", "/") // unknown public address: not on the allow list
+	requireStatus(t, err, 403)
+
+	err, called, _ = serve(a, "10.1.2.3", "GET", "/") // private addresses have no country and pass
+	assert.NoError(t, err)
+	assert.True(t, called)
+
+	b := &Access{BlockCountries: []string{"CN"}} // a block list alone lets unknown through
+	provision(t, b)
+	b.countryOf = func(netip.Addr) string { return "" }
+	err, called, _ = serve(b, "9.9.9.9", "GET", "/")
 	assert.NoError(t, err)
 	assert.True(t, called)
 }

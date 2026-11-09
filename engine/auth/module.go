@@ -128,7 +128,8 @@ func (a *Auth) Validate() error {
 
 func (a *Auth) mac(user, exp string) []byte {
 	h := hmac.New(sha256.New, a.key)
-	h.Write([]byte("auth|" + a.SiteID + "|" + user + "|" + exp))
+	h.Write([]byte("auth|" + a.SiteID + "|" + user + "|" + exp + "|"))
+	h.Write(a.hashes[user]) // a new password (new bcrypt hash) ends the user's old sessions
 	return h.Sum(nil)
 }
 

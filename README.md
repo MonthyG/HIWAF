@@ -24,7 +24,7 @@ OWASP Core Rule Set (CRS). It has two programs:
 internet ──► :80 / :443 ──► hi-waf engine ──► customer origin (upstream)
                                ▲      │
                config (JSON)   │      │ events.log, access.log
-               localhost:2019  │      ▼
+          /data/caddy-admin.sock│     ▼
                              manager ──► SQLite (/data/waf.db)
                                ▲
           console + REST API   │ :9443 (HTTPS)
@@ -32,9 +32,12 @@ internet ──► :80 / :443 ──► hi-waf engine ──► customer origin 
 ```
 
 **The engine and the manager must run on the same host.** The manager pushes
-config to the engine's admin API on `localhost:2019`, which has no login and
-must never be reachable from the network, and it reads the engine's log files
-from local disk. `compose.yaml` runs both containers on the host network for
+config to the engine's admin API, which has no login, and it reads the
+engine's log files from local disk. `install.sh` puts the admin API on a unix
+socket in the data volume (`/data/caddy-admin.sock`, owner-only), so nothing
+else on the host network can reach it. A fresh engine starts on Caddy's default
+`localhost:2019`; the manager's first push moves it to the socket.
+`compose.yaml` runs both containers on the host network for
 this reason.
 
 ## The console
@@ -75,8 +78,8 @@ The script:
 - checks that ports 80, 443 and 9443 are free
 - writes `/data/hiwaf/manager.json`
 - downloads the DB-IP Country Lite database for geo features
-- builds the image and starts the containers `hiwaf-engine` and
-  `hiwaf-manager`, both on the host network
+- builds the images `hiwaf-engine` and `hiwaf-manager` (two targets of one
+  Dockerfile) and starts their containers, both on the host network
 - prints the console URL `https://<server>:9443` and the generated `admin`
   password
 
@@ -90,6 +93,19 @@ docker exec hiwaf-manager manager -config /data/manager.json -resetadmin
 ```
 
 Logs: `docker compose logs -f manager` and `docker compose logs -f engine`.
+
+### Images and CI
+
+```sh
+docker build --target engine  -t hiwaf-engine .
+docker build --target manager -t hiwaf-manager .
+```
+
+`.gitlab-ci.yml` runs on the `build` branch and on tags: gofmt, vet and the tests,
+then both images are built with buildx and pushed to Harbor as
+`<project>-engine:<short sha>` and `<project>-manager:<short sha>`; a tag also retags
+them `:<tag>` and `:latest`. It needs the CI variables `HARBOR_HOST`,
+`HARBOR_PROJECT`, `HARBOR_USERNAME` and `HARBOR_PASSWORD`, and a runner tagged `docker`.
 
 ## Deploy on an OpenStack VM
 
@@ -134,7 +150,8 @@ WAF can't be bypassed.
 | `listen` | `:9000` (`install.sh`: `:9443`) | Console and API address |
 | `db_path` | `waf.db` | SQLite database |
 | `data_dir` | the directory of `db_path` | Base for the defaults below |
-| `caddy_admin` | `http://localhost:2019` | Engine admin API; keep it on localhost |
+| `skip_domain_check` | `false` | `true` lets projects add domains without the `_hiwaf` TXT proof (test servers only) |
+| `caddy_admin` | `http://localhost:2019` (`install.sh`: `unix:///data/caddy-admin.sock`) | Engine admin API: a unix socket, or a localhost URL |
 | `event_log`, `access_log` | `events.log`, none | Engine logs the manager reads |
 | `api_keys` | none | Operator keys for `Authorization: Bearer <key>` |
 | `http_port`, `https_port` | `80`, `443` | Default ports for sites |
@@ -314,16 +331,20 @@ one WAF can serve many customers without them seeing each other.
   session) see everything. They can act for one project by sending the header
   `X-Project-Id: <project>`.
 - **Project tokens** are created with a project:
-  `POST /api/v1/tokens {"name": "...", "project": "..."}`. The token is shown
-  once. It only ever acts for that project.
+  `POST /api/v1/tokens {"name": "...", "project": "...", "expires_days": 90}`.
+  The token is shown once. It only ever acts for that project.
+  `expires_days` (1-3650) makes a token stop working after that many days;
+  0 or absent means it never expires. Any token can be revoked at any time.
 - A project caller sees and changes only its own sites. Other projects' sites
   answer 404, as if they didn't exist.
 - A project's site is checked more strictly, because tenants share the
   engine:
   - no `*` domain, and a wildcard needs two labels after `*.`
+  - at most 100 sites per project (403 after that)
   - no custom `ports`
-  - `upstreams` must be IP addresses, not host names, and not loopback,
-    unspecified, link-local (cloud metadata) or multicast
+  - `upstreams` must be public IP addresses: not host names, and not
+    loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), CGNAT
+    (100.64/10), link-local (cloud metadata) or multicast
   - no shared certificates (`tls.cert_id`) or shared IP groups
 - Shared objects (certificates, IP groups, global rules), backups, rule sets,
   alerts, tokens and the system page are operator-only.
@@ -485,9 +506,9 @@ rolled back.
 
 ## Development
 
-- **Go 1.26 or later.** coraza-caddy's `go.mod` requires 1.26.0. You don't
+- **Go 1.27 or later** (our `go.mod` says 1.27.0). You don't
   need xcaddy, because `cmd/hi-waf` is our own Caddy main.
-- **Node 22** for the console.
+- **Node 26** (LTS) for the console.
 
 ```sh
 (cd console && npm ci && npm run build)   # builds into manager/console/dist

@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -30,9 +32,24 @@ func (e *LoadError) Error() string {
 
 // Client is a Caddy admin API client.
 type Client struct {
-	BaseURL string       // e.g. http://127.0.0.1:2019
-	HTTP    *http.Client // nil uses a client with a 30s timeout
+	// BaseURL is http://localhost:2019 or a unix socket, unix:///data/caddy-admin.sock.
+	BaseURL string
+	// Bootstrap is the TCP address Load falls back to while the socket does
+	// not exist: a fresh engine listens on Caddy's default until the first
+	// load (whose config names the socket) moves its admin API there.
+	Bootstrap string
+	HTTP      *http.Client // nil: a plain client; do sets the timeouts
+
+	once sync.Once
+	unix *http.Client
 }
+
+// Timeouts: a load compiles every site's WAF rules, which takes longer the
+// more sites there are, so it gets far more time than the small calls.
+const (
+	callTimeout = 30 * time.Second
+	loadTimeout = 5 * time.Minute
+)
 
 // Ban is one banned IP.
 type Ban struct {
@@ -40,10 +57,44 @@ type Ban struct {
 	Until time.Time `json:"until"`
 }
 
-var defaultHTTP = &http.Client{Timeout: 30 * time.Second}
+// client returns the HTTP client and URL prefix for base.
+func (c *Client) client(base string) (*http.Client, string) {
+	sock, ok := strings.CutPrefix(base, "unix://")
+	if !ok {
+		if c.HTTP != nil {
+			return c.HTTP, strings.TrimRight(base, "/")
+		}
+		return http.DefaultClient, strings.TrimRight(base, "/")
+	}
+	c.once.Do(func() {
+		c.unix = &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", sock)
+		}}}
+	})
+	// Caddy does not check the Host of requests on a unix socket; any will do.
+	return c.unix, "http://127.0.0.1"
+}
 
 func (c *Client) do(ctx context.Context, method, path string, q url.Values, body []byte) (int, []byte, error) {
-	u := strings.TrimRight(c.BaseURL, "/") + path
+	timeout := callTimeout
+	if path == "/load" {
+		timeout = loadTimeout
+	}
+	status, b, err := c.doAt(ctx, c.BaseURL, timeout, method, path, q, body)
+	// No socket (fresh engine) or a stale one (engine restarted without its
+	// saved config): the engine is on Caddy's default TCP address.
+	if errors.Is(err, ErrUnreachable) && path == "/load" && c.Bootstrap != "" && strings.HasPrefix(c.BaseURL, "unix://") {
+		return c.doAt(ctx, c.Bootstrap, timeout, method, path, q, body)
+	}
+	return status, b, err
+}
+
+func (c *Client) doAt(parent context.Context, base string, timeout time.Duration, method, path string, q url.Values, body []byte) (int, []byte, error) {
+	h, prefix := c.client(base)
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	u := prefix + path
 	if len(q) > 0 {
 		u += "?" + q.Encode()
 	}
@@ -58,14 +109,10 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, body
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	h := c.HTTP
-	if h == nil {
-		h = defaultHTTP
-	}
 	resp, err := h.Do(req)
 	if err != nil {
-		if ctx.Err() != nil {
-			return 0, nil, ctx.Err()
+		if parent.Err() != nil { // the caller gave up; our own timeout is "unreachable"
+			return 0, nil, parent.Err()
 		}
 		return 0, nil, fmt.Errorf("%w: %v", ErrUnreachable, err)
 	}

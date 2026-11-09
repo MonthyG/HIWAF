@@ -11,12 +11,14 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -60,7 +62,13 @@ type API struct {
 	started time.Time
 	ops     Ops
 	note    string // initial-admin.txt, removed once admin's password changes
+
+	resyncing atomic.Bool // a resync after an unanswered load is running
+	lookupTXT TXTLookup   // domain ownership check for project callers; nil: off
 }
+
+// resyncRetry is the pause between resync attempts while the engine is unreachable.
+var resyncRetry = 30 * time.Second
 
 // New returns an API. Empty keys are ignored.
 func New(st *store.Store, cl Loader, opt compile.Options, apiKeys []string) *API {
@@ -81,6 +89,7 @@ func (a *API) Handler() http.Handler {
 	// Sites.
 	handle("POST /api/v1/sites", anyCaller, a.createSite)
 	handle("GET /api/v1/sites", anyCaller, a.listSites)
+	handle("GET /api/v1/domain-check", anyCaller, a.domainCheck)
 	handle("GET /api/v1/sites/{id}", siteInPath, a.getSite)
 	handle("PUT /api/v1/sites/{id}", siteInPath, a.putSite)
 	handle("PATCH /api/v1/sites/{id}", siteInPath, a.patchSite)
@@ -189,7 +198,7 @@ func globals(tx *store.Tx) (site.Globals, map[string]site.Cert, error) {
 // transaction: any error, including Caddy's, rolls fn's changes back. Only
 // the *Tx may be used here; the store has a single connection.
 func (a *API) apply(ctx context.Context, fn func(*store.Tx) error) error {
-	return a.st.Tx(ctx, func(tx *store.Tx) error {
+	err := a.st.Tx(ctx, func(tx *store.Tx) error {
 		if err := fn(tx); err != nil {
 			return err
 		}
@@ -227,6 +236,36 @@ func (a *API) apply(ctx context.Context, fn func(*store.Tx) error) error {
 		}
 		return a.cl.Load(ctx, cfg)
 	})
+	if errors.Is(err, caddyclient.ErrUnreachable) {
+		// The engine may still apply a load we stopped waiting for, which
+		// would leave it running a config the database rolled back.
+		go a.resync()
+	}
+	return err
+}
+
+// resync pushes the saved config until the engine takes it, so the engine
+// ends up running what the database holds. Only one runs at a time.
+func (a *API) resync() {
+	if !a.resyncing.CompareAndSwap(false, true) {
+		return
+	}
+	defer a.resyncing.Store(false)
+	for i := 0; i < 20; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+		err := a.Sync(ctx) // waits for any running change: the store has one connection
+		cancel()
+		if err == nil {
+			a.log.Info("engine put back to the saved config after an unanswered load")
+			return
+		}
+		if !errors.Is(err, caddyclient.ErrUnreachable) {
+			a.log.Error("resync after an unanswered load failed", "err", err)
+			return
+		}
+		time.Sleep(resyncRetry)
+	}
+	a.log.Error("engine still unreachable; it may be running a config the database does not hold")
 }
 
 // --- errors ---------------------------------------------------------------
@@ -259,7 +298,7 @@ func (a *API) writeErr(w http.ResponseWriter, err error) {
 	case errors.As(err, &ve):
 		writeJSON(w, http.StatusBadRequest, errBody{Error: ve.Msg, Field: ve.Field})
 	case errors.Is(err, caddyclient.ErrUnreachable):
-		writeJSON(w, http.StatusServiceUnavailable, errBody{Error: "engine unreachable; nothing was changed"})
+		writeJSON(w, http.StatusServiceUnavailable, errBody{Error: "the engine did not answer, so the change was not saved; the engine is being put back to the saved config"})
 	case errors.As(err, &le):
 		writeJSON(w, http.StatusBadGateway, errBody{Error: "engine rejected the config: " + caddyMessage(le.Body)})
 	default:
@@ -577,9 +616,16 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, err)
 		return
 	}
+	if err := a.checkClaims(r.Context(), p, d, nil); err != nil {
+		a.writeErr(w, err)
+		return
+	}
 	t := now()
 	rec := store.SiteRecord{ID: site.NewID(), Created: t, Updated: t}
 	err := a.apply(mutationCtx(r), func(tx *store.Tx) error {
+		if err := projectHasRoom(tx, d.Project); err != nil {
+			return err
+		}
 		if err := a.prepareDoc(&d, nil); err != nil {
 			return err
 		}
@@ -591,6 +637,32 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, a.view(rec))
+}
+
+// maxProjectSites caps one project's sites, so a customer can't load the shared
+// engine with thousands of configs. Operator sites (no project) have no cap.
+// shortcut: one cap for everyone, make it per plan when billing has plans.
+var maxProjectSites = 100
+
+// projectHasRoom counts inside the transaction, so parallel creates can't pass the cap together.
+func projectHasRoom(tx *store.Tx, project string) error {
+	if project == "" {
+		return nil
+	}
+	recs, err := tx.ListSites()
+	if err != nil {
+		return err
+	}
+	n := 0
+	for _, r := range recs {
+		if r.Doc.Project == project {
+			n++
+		}
+	}
+	if n >= maxProjectSites {
+		return &httpError{status: http.StatusForbidden, msg: fmt.Sprintf("this project already has the maximum of %d sites", maxProjectSites)}
+	}
+	return nil
 }
 
 func (a *API) listSites(w http.ResponseWriter, r *http.Request) {
@@ -646,6 +718,11 @@ func (a *API) replaceSite(w http.ResponseWriter, r *http.Request, merge func(sto
 			return err
 		}
 		if err := tenantDoc(principalOf(r), &d); err != nil {
+			return err
+		}
+		// shortcut: DNS lookups inside the transaction hold the store's one connection
+		// (5s at most per new domain); move them out if customers add domains often.
+		if err := a.checkClaims(r.Context(), principalOf(r), d, &got.Doc); err != nil {
 			return err
 		}
 		prev := got.Doc

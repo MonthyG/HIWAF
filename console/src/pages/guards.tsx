@@ -140,7 +140,7 @@ export function RateEditor({ site, onDone }: EditorProps) {
               <Switch label={d.title} checked={!!l} onChange={(on) => set(on ? { ...d.def } : null)} /> {d.title}
             </label>
             {l && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingLeft: 40 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingLeft: 44 }}>
                 <span>Ban a source after</span>
                 <input aria-label={`${d.title}: count`} className="input num" style={{ width: 84 }} type="number" min={1} value={l.requests} onChange={(e) => set({ ...l, requests: Number(e.target.value) })} />
                 <span>{d.what} in</span>

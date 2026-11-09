@@ -53,7 +53,7 @@ if [ ! -f "$DATA/manager.json" ]; then
   "listen": ":$PORT",
   "db_path": "/data/waf.db",
   "data_dir": "/data",
-  "caddy_admin": "http://localhost:2019",
+  "caddy_admin": "unix:///data/caddy-admin.sock",
   "event_log": "/data/logs/events.log",
   "access_log": "/data/logs/access.log",
   "static_dir": "/data/static",
@@ -78,6 +78,13 @@ if [ ! -s "$DATA/geoip/country.mmdb" ]; then
   done
   $ok || { rm -f "$DATA/geoip/country.mmdb.tmp"; sed -i 's#"geoip_db": "/data/geoip/country.mmdb"#"geoip_db": ""#' "$DATA/manager.json"
            echo "  (download failed; geo features stay off until $DATA/geoip/country.mmdb exists and geoip_db is set)"; }
+fi
+
+# Older installs pushed the engine admin API to localhost:2019, open to every
+# process on the host network; move it to the owner-only socket.
+if grep -q '"caddy_admin": "http://localhost:2019"' "$DATA/manager.json"; then
+  say "Moving the engine admin API to a unix socket"
+  sed -i 's|"caddy_admin": "http://localhost:2019"|"caddy_admin": "unix:///data/caddy-admin.sock"|' "$DATA/manager.json"
 fi
 
 say "Building the image (first run takes a few minutes)"
