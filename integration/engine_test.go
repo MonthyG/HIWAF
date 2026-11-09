@@ -226,6 +226,41 @@ func TestE2E_SQLiBlockedAndEventLogged(t *testing.T) {
 	e.waitLog(t, `coraza [id "942`, hasText(`[id "942`))
 }
 
+// The rules HI WAF adds to the CRS (compile.extraRules): they block what CRS
+// misses at paranoia 1 and pass look-alike normal input.
+func TestE2E_ExtraRules(t *testing.T) {
+	startEngine(t, "s_e2e000000009", `{}`)
+	for path, want := range map[string]int{
+		"/?host=127.0.0.1%20%7C%20id":           http.StatusForbidden, // | id
+		"/?file=%60id%60":                       http.StatusForbidden, // `id`
+		"/?q=Q%26A%3B%20id%20card":              http.StatusOK,
+		"/?sort=id":                             http.StatusOK,
+		"/?q=Tom%20%26%20Jerry%3B%20season%202": http.StatusOK,
+	} {
+		if code, _ := get(t, path, nil); code != want {
+			t.Errorf("GET %s: got %d, want %d", path, code, want)
+		}
+	}
+	post := func(body string) int {
+		req, _ := http.NewRequest(http.MethodPost, engineURL+"/api", strings.NewReader(body))
+		req.Host = "a.test"
+		req.Header.Set("User-Agent", browserUA)
+		req.Header.Set("Content-Type", "application/xml")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := post(`<?xml version="1.0"?><!DOCTYPE f [<!ENTITY x SYSTEM "file:///etc/hostname">]><f>&x;</f>`); code != http.StatusForbidden {
+		t.Errorf("XXE: got %d, want 403", code)
+	}
+	if code := post(`<order><note>Tom &amp; Jerry &lt;3 &#169;</note></order>`); code != http.StatusOK {
+		t.Errorf("normal XML: got %d, want 200", code)
+	}
+}
+
 func TestE2E_DetectModePassesButLogs(t *testing.T) {
 	e := startEngine(t, "s_e2e000000002", `{"waf":{"mode":"detect"}}`)
 

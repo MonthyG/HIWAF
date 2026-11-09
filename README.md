@@ -247,7 +247,14 @@ An app profile loads the official CRS exclusion plugin for that application,
 so its normal admin work isn't blocked. `GET /api/v1/apps` lists them:
 `wordpress`, `drupal`, `nextcloud`, `phpmyadmin`, `dokuwiki`, `phpbb` and
 `xenforo`. The plugins ship inside the manager, with their licenses, under
-`manager/crsplugins/files/`.
+`manager/crsplugins/files/`. `graphql` is HI WAF's own profile: on `/graphql`
+it skips the SQL and shell rules for the GraphQL query text; the variables are
+still checked.
+
+Besides CRS, every WAF-on site gets two HI WAF rules: 932990 (a shell command
+right after a shell operator, e.g. `; id` or `` `id` ``) and 921990 (XXE: an XML
+body using an entity it declared itself). They follow the "command injection"
+and "protocol attacks" protections.
 
 ### Per-rule exceptions (`exclusions`)
 

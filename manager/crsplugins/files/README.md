@@ -11,5 +11,8 @@ OWASP CRS rule-exclusion plugins, vendored unchanged from these releases:
 | xenforo    | github.com/coreruleset/xenforo-rule-exclusions-plugin    | v1.0.0 |
 
 Each directory holds the release's `plugins/*.conf` and its Apache-2.0 `LICENSE`.
+
+`graphql` is HI WAF's own profile, not a CRS release: it lets the rules that
+misread GraphQL syntax skip the `query` field on `/graphql` (see the file's comments).
 To update one, replace its files with a newer release's and change the version in
 `../crsplugins.go`.

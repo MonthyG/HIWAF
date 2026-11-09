@@ -37,6 +37,8 @@ var Catalog = []App{
 	{"dokuwiki", "DokuWiki", "Editing and saving wiki pages.", []string{"/doku.php", "/lib/exe/"}, "v1.0.0"},
 	{"phpbb", "phpBB", "Posting, private messages and the admin panel.", []string{"/posting.php", "/ucp.php", "/adm/"}, "v1.0.0"},
 	{"xenforo", "XenForo", "Posting, conversations and the admin panel.", []string{"/threads/", "/admin.php"}, "v1.0.0"},
+	// HI WAF's own, not a CRS release
+	{"graphql", "GraphQL API", "Queries and mutations sent to /graphql. The query text is GraphQL, not SQL or shell; its variables are still checked.", []string{"/graphql"}, "hi-1"},
 }
 
 // Known reports whether key names a profile.

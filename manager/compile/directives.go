@@ -14,6 +14,25 @@ import (
 // in the 1-99,999 range left for local rules.
 const exclusionBaseID = 10100
 
+// extraRules close gaps the CRS leaves at paranoia 1, found by attack tests
+// (local-demo/wafbench). They load before the CRS rules so they score before
+// its blocking check (949110), and their IDs sit in the CRS ranges of their
+// protection, so turning that protection off removes them too.
+//
+//   - 921990 XXE: Coraza's XML parser keeps an entity it doesn't know (&xxe;)
+//     as text and resolves the standard ones, so a leftover &name; means the
+//     request declared its own entity.
+//     shortcut: Coraza doesn't expose the raw XML body, so a blind XXE that only
+//     uses %parameter; entities inside the DOCTYPE is missed; inspect the raw
+//     body in a middleware if XML APIs become common.
+//   - 932990 a recon command right after a shell operator ("| id", "`id`",
+//     "; whoami -a"). CRS leaves short commands like these to paranoia 2, which
+//     also blocks searches such as "cat food". Requiring the operator, and the
+//     command to end there or take a flag, keeps "Q&A; id card" and "sort=id" out.
+const extraRules = `SecRule XML:/* "@rx &[A-Za-z_][A-Za-z0-9_.-]*;" "id:921990,phase:2,block,capture,t:none,msg:'XML entity the request declared itself (XXE)',logdata:'Matched Data: %{TX.0} found within %{MATCHED_VAR_NAME}: %{MATCHED_VAR}',tag:'attack-protocol',tag:'paranoia-level/1',severity:'CRITICAL',setvar:'tx.inbound_anomaly_score_pl1=+%{tx.critical_anomaly_score}'"
+SecRule REQUEST_COOKIES|ARGS_NAMES|ARGS "@rx (?:[;|&\x60\n]|\$\()\s*(?:id|whoami|uname|ifconfig|ipconfig|hostname|netstat|printenv)(?:\s*$|\s*[;|&\x60)]|\s+-)" "id:932990,phase:2,block,capture,t:none,msg:'Command injection: a shell command after a shell operator',logdata:'Matched Data: %{TX.0} found within %{MATCHED_VAR_NAME}: %{MATCHED_VAR}',tag:'attack-rce',tag:'paranoia-level/1',severity:'CRITICAL',setvar:'tx.rce_score=+%{tx.critical_anomaly_score}',setvar:'tx.inbound_anomaly_score_pl1=+%{tx.critical_anomaly_score}'"
+`
+
 // AllowedMethods widens CRS's GET HEAD POST OPTIONS so REST APIs work.
 const AllowedMethods = "GET HEAD POST OPTIONS PUT PATCH DELETE"
 
@@ -79,6 +98,7 @@ func Directives(s site.Resolved, crsDir, pluginsDir string) string {
 		}
 		line(`SecRule REQUEST_FILENAME "%s %s" "id:%d,phase:1,t:none,pass,nolog,%s"`, op, path, exclusionBaseID+i, ctl)
 	}
+	b.WriteString(extraRules)
 	line("Include %s", rules)
 	plugins(func(st crsplugins.Stages) []string { return st.After })
 	// Site-wide exceptions change the loaded rules, so they follow them.
